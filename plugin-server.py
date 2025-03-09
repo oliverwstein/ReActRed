@@ -238,10 +238,9 @@ def run_game(rom_path, memory_addresses_path, memory_values_path, stop_event):
                 if cmd_type == "button":
                     # Use pyboy.button with 24 frames duration for consistent button presses
                     pyboy.button(cmd_data, 24)
-                    enhanced_wrapper._current_button_pressed = cmd_data
+                    print(cmd_data)
+                    enhanced_wrapper.data['last_button'] = cmd_data
 
-
-                    
             # Process a frame
             pyboy.tick()
             frame_count += 1

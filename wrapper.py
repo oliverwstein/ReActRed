@@ -2,6 +2,8 @@ import base64
 
 import cv2
 
+from log import Logger
+
 class EnhancedPokemonWrapper:
     """
     Enhanced wrapper for Pokemon Red/Blue games that extracts additional data
@@ -9,7 +11,7 @@ class EnhancedPokemonWrapper:
     self.data structure:
     {
         'frame': int,  # Current frame number
-        'state': str,  # Game state: "overworld", "menu", "dialog", "scripted"
+        'state': str,  # Game state: "default", "menu", "dialog", "scripted"
         'is_in_battle': bool,  # Whether the player is currently in a battle
         'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", etc.
         'screen': str,  # Base64-encoded JPEG image of the current screen
@@ -139,8 +141,9 @@ class EnhancedPokemonWrapper:
             "is_in_battle": False,
             'map': {},
             'player': {},
+            'last_button': 'start'
             }
-        self._current_button_pressed = None
+        self.logger = Logger()
           
     def __str__(self):
         """Return a string representation of the current game state."""
@@ -150,9 +153,8 @@ class EnhancedPokemonWrapper:
         
         f = io.StringIO()
         with redirect_stdout(f):
-            
             print(f"\n{'-' * 20} Frame: {self.data['frame']} {'-' * 20}")
-            print(f"State: {self.data['state']} | In Battle: {self.data['is_in_battle']}")
+            print(f"State: {self.data['state']} | In Battle: {self.data['is_in_battle']} | Last Button: {self.data['last_button']}")
             
             # Map information
             print(f"\n=== MAP INFO ===")
@@ -254,11 +256,15 @@ class EnhancedPokemonWrapper:
                     print(f"  {line}")
                         
             # Tilemap visualization
-            if self.data['state'] == 'overworld' and not self.data['is_in_battle'] and self.data['viewport'].get('tiles'):
+            if self.data['state'] == 'default' and not self.data['is_in_battle'] and self.data['viewport'].get('tiles'):
                 print(f"\n=== MAP VIEW ===")
                 for row in self.data['viewport']['tiles']:
                     print('  ' + ' '.join(row))
             
+            # Print Log Info:
+            print(f"\n=== LOG VIEW ===")
+            print(f"Recent Logs: {print(self.logger)}")
+
         return f.getvalue()
     
     def update(self, frame):
@@ -267,8 +273,6 @@ class EnhancedPokemonWrapper:
         """
         try:
             self.data['frame'] = frame
-            if self._current_button_pressed:
-                self.data['last_button'] = self._current_button_pressed
             try:
                 # Screenshot handling
                 screen_ndarray_bgr = cv2.cvtColor(self.pyboy.screen.ndarray, cv2.COLOR_RGB2BGR)
@@ -304,14 +308,14 @@ class EnhancedPokemonWrapper:
                 scripted_sequence = joy_ignore != 0
                 
                 # Determine the primary state based on priorities
-                self.data['state'] = 'overworld'  # Default state
-                
                 if scripted_sequence:
                     self.data['state'] = 'scripted'
                 elif menu_active:
                     self.data['state'] = 'menu'
                 elif self.data['text'].get("dialog", False):
                     self.data['state'] = 'dialog'
+                else:
+                    self.data['state'] = 'default'
                 
             except Exception as e:
                 print(f"ERROR determining game state: {e}")
@@ -362,6 +366,7 @@ class EnhancedPokemonWrapper:
                     'bag': [],
                     'team': {'count': 0, 'pokemon': []}
                 }
+            self.logger.log_update(self)
 
         except Exception as e:
             print(f"CRITICAL ERROR in update method: {e}")
@@ -993,7 +998,7 @@ class EnhancedPokemonWrapper:
         for line in dialog_area:
             clean_line = line.strip()
             if clean_line and "▶" not in clean_line and clean_line != "▼":
-                current_dialog_text.append(clean_line)
+                current_dialog_text.append(clean_line.strip("▼"))
         if len(current_dialog_text) > 0:
             result['dialog'] = current_dialog_text
         # Check if joypad input is being ignored (common during dialog)
