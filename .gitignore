@@ -8,3 +8,4 @@
 /plugin_test.py
 /world_graph.py
 /.venv
+*.sh
