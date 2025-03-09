@@ -9,7 +9,7 @@ class EnhancedPokemonWrapper:
     self.data structure:
     {
         'frame': int,  # Current frame number
-        'state': str,  # Game state: "overworld", "menu", "dialog", "scripted", "battle", or "unknown"
+        'state': str,  # Game state: "overworld", "menu", "dialog", "scripted"
         'is_in_battle': bool,  # Whether the player is currently in a battle
         'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", etc.
         'screen': str,  # Base64-encoded JPEG image of the current screen
