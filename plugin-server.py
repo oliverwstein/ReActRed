@@ -12,7 +12,6 @@ import sys
 import time
 import queue
 from wrapper import EnhancedPokemonWrapper
-from world_graph import PokemonWorldGraph
 
 def keep_screen(no_clear):
     """Clear the terminal screen in a cross-platform way"""
@@ -39,7 +38,6 @@ class WebSocketServer:
         self.stop_event = asyncio.Event()
         self.server_thread = None
         self.command_queue = queue.Queue()
-        self.world_graph = PokemonWorldGraph()
         
     def start(self):
         """Start WebSocket server in a separate thread"""
