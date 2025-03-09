@@ -6,6 +6,125 @@ class EnhancedPokemonWrapper:
     """
     Enhanced wrapper for Pokemon Red/Blue games that extracts additional data
     directly from memory addresses.
+    self.data structure:
+    {
+        'frame': int,  # Current frame number
+        'state': str,  # Game state: "overworld", "menu", "dialog", "scripted", "battle", or "unknown"
+        'is_in_battle': bool,  # Whether the player is currently in a battle
+        'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", etc.
+        'screen': str,  # Base64-encoded JPEG image of the current screen
+
+        'map': {
+            'name': str,  # Current map name, e.g., "PalletTown"
+            'tileset': {
+                'name': str,  # Name of the current tileset, e.g., "Overworld"
+                'counter_tiles': list,  # Tiles used for counters in the tileset
+                'grass_tile': int,  # Tile ID for grass in the tileset
+                'animation': str,  # Animation type for the tileset, e.g., "TILEANIM_WATER"
+                'WATER': bool  # Whether the tileset contains water tiles
+            },
+            'dimensions': tuple,  # (width, height) of the current map in tiles
+            'warps': {
+                # Dictionary of warp points on the map
+                # Keys are (x, y) coordinates, values are destination map names
+                (x, y): str
+            }
+        },
+
+        'player': {
+            'position': tuple,  # (x_coord, y_coord, facing_direction)
+            'money': int,  # Player's current money amount
+            'badges': list,  # List of obtained badge names
+            'pokedex': {
+                'owned': int,  # Number of Pokémon owned
+                'seen': int  # Number of Pokémon seen
+            },
+            'bag': list,  # List of (item_name, quantity) tuples
+            'team': {
+                'count': int,  # Number of Pokémon in party
+                'pokemon': [
+                    {
+                        'species_id': str,  # Pokémon species identifier
+                        'nickname': str,  # Pokémon's nickname
+                        'level': int,  # Pokémon's level
+                        'current_hp': int,  # Current HP
+                        'max_hp': int,  # Maximum HP
+                        'status': str,  # Status condition, e.g., "Healthy", "Poisoned"
+                        'types': list,  # List of type names, e.g., ["FIRE", "FLYING"]
+                        'moves': list,  # List of move names
+                        'stats': {
+                            'HP': int,
+                            'ATTACK': int,
+                            'DEFENSE': int,
+                            'SPEED': int,
+                            'SPECIAL': int
+                        }
+                    },
+                    # Additional Pokémon entries...
+                ]
+            }
+        },
+
+        'viewport': {
+            'tiles': list,  # 2D array of tile representations showing walkable areas and special tiles
+            'entities': [
+                {
+                    'sprite_index': int,  # Index of the sprite in memory
+                    'name': str,  # Name of the sprite, e.g., "OakSprite"
+                    'position': {
+                        'x': int,  # X coordinate on the map
+                        'y': int  # Y coordinate on the map
+                    },
+                    'movement': {
+                        'status': int,  # Movement status value
+                        'type': str,  # Type of movement, e.g., "stationary", "random"
+                        'delay': int,  # Delay between movements
+                        'direction': str  # Current facing direction
+                    },
+                    'state': str  # Overall state of the entity
+                },
+                # Additional entity entries...
+            ]
+        },
+
+        'text': {
+            'lines': list,  # All visible text lines on screen
+            'menu_state': {
+                'current_item': int,  # Currently selected menu item index
+                'max_item': int,  # Maximum menu item index
+                'cursor_pos': tuple,  # (x, y) position of cursor, or None if no cursor
+                'cursor_text': str  # Text at cursor position, or None
+            },
+            'dialog': list,  # Current dialog text lines
+            'text_context': str  # Overall text context: "menu", "dialog", or "none"
+        },
+
+        'battle': {
+            # Only present when is_in_battle is True
+            'is_trainer_battle': bool,  # Whether this is a trainer battle
+            'player_pokemon': {
+                # Same structure as team pokemon, but for active battler
+                'species_id': int,
+                'species_name': str,
+                'nickname': str,
+                'level': int,
+                'hp_percent': int,  # Current HP as percentage of max
+                'status': str,
+                'types': list
+            },
+            'enemy_pokemon': {
+                # Same structure as player_pokemon, but for enemy
+                'species_id': int,
+                'species_name': str,
+                'nickname': str,
+                'level': int,
+                'hp_percent': int,
+                'status': str,
+                'types': list
+            },
+            'turn_counter': int  # Current battle turn number
+        }
+    }
     """
     
     def __init__(self, pyboy, memory_addresses=None, value_maps=None):
@@ -133,7 +252,7 @@ class EnhancedPokemonWrapper:
                 print(f"\n=== DIALOG ===")
                 for line in self.data['text']['dialog']:
                     print(f"  {line}")
-
+                        
             # Tilemap visualization
             if self.data['state'] == 'overworld' and not self.data['is_in_battle'] and self.data['viewport'].get('tiles'):
                 print(f"\n=== MAP VIEW ===")
@@ -821,7 +940,6 @@ class EnhancedPokemonWrapper:
     def get_text_data(self):
         """
         Extract text data from the tilemap with improved structured handling of dialog and menus.
-        Uses dialog content changes to track progression without relying on continue markers.
         
         Returns:
             dict: Dictionary containing structured text data
@@ -867,16 +985,6 @@ class EnhancedPokemonWrapper:
         
         result["menu_state"] = menu_state
         
-        # Initialize dialog tracking state if it doesn't exist
-        if not hasattr(self, '_dialog_tracker'):
-            self._dialog_tracker = {
-                'current_dialog': [],     # Current dialog text
-                'dialog_history': [],     # Complete dialog history for current conversation
-                'stable_frames': 0,       # Counter for frames without dialog changes
-                'last_dialog_change': 0,  # Frame count of last dialog change
-                'in_conversation': False  # Whether we're currently in a conversation
-            }
-        
         # Check if we're in a dialog state - dialog area is typically the bottom portion
         dialog_area = screen_text[12:18]  # Rows where dialog typically appears
         
@@ -886,65 +994,15 @@ class EnhancedPokemonWrapper:
             clean_line = line.strip()
             if clean_line and "▶" not in clean_line and clean_line != "▼":
                 current_dialog_text.append(clean_line)
-        
-        # Check if text input is being ignored (common during dialog)
+        if len(current_dialog_text) > 0:
+            result['dialog'] = current_dialog_text
+        # Check if joypad input is being ignored (common during dialog)
         joy_ignore = self.pyboy.memory[0xCD6B]  # wJoyIgnore
         scripted_input = joy_ignore != 0
         
         # Determine if we're in dialog mode based on multiple factors
         in_dialog_mode = len(current_dialog_text) > 0 or scripted_input
         
-        # Track dialog changes
-        if current_dialog_text != self._dialog_tracker['current_dialog']:
-            # Dialog text has changed
-            self._dialog_tracker['stable_frames'] = 0
-            self._dialog_tracker['last_dialog_change'] = self.data.get('frame', 0)
-            
-            # Check if this is a continuation of existing dialog or new dialog
-            if not self._dialog_tracker['in_conversation'] or not self._dialog_tracker['current_dialog']:
-                # New conversation starting
-                self._dialog_tracker['in_conversation'] = True
-                self._dialog_tracker['dialog_history'] = current_dialog_text
-            else:
-                # Could be a continuation - check for partial overlap
-                old_dialog = self._dialog_tracker['current_dialog']
-                
-                # Check for scrolling text (first line of new text matches last line of old text)
-                if (len(old_dialog) > 0 and len(current_dialog_text) > 0 and 
-                    old_dialog[-1] == current_dialog_text[0]):
-                    # Dialog scrolled - append only new lines
-                    self._dialog_tracker['dialog_history'] += current_dialog_text[1:]
-                else:
-                    # Different content - likely a new dialog box
-                    # Add a separator to history for clarity
-                    if self._dialog_tracker['dialog_history']:
-                        self._dialog_tracker['dialog_history'].append("---")
-                    self._dialog_tracker['dialog_history'] += current_dialog_text
-            
-            # Update current dialog
-            self._dialog_tracker['current_dialog'] = current_dialog_text
-        else:
-            # No change in dialog text
-            self._dialog_tracker['stable_frames'] += 1
-            
-            # If we've had no dialog for a significant time, reset conversation state
-            if (not in_dialog_mode and 
-                self._dialog_tracker['stable_frames'] > 30 and  # About 1 second
-                self._dialog_tracker['in_conversation']):
-                self._dialog_tracker['in_conversation'] = False
-                self._dialog_tracker['dialog_history'] = []
-        
-        # Set dialog in result
-        result["dialog"] = self._dialog_tracker['current_dialog']
-        result["dialog_history"] = self._dialog_tracker['dialog_history']
-        
-        # Add dialog state information
-        result["dialog_state"] = {
-            "active": in_dialog_mode,
-            "in_conversation": self._dialog_tracker['in_conversation'],
-            "stable_frames": self._dialog_tracker['stable_frames'],
-            "last_change": self._dialog_tracker['last_dialog_change']
-        }
         
         # Determine the overall text context
         if menu_active:
