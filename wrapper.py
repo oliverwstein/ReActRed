@@ -13,7 +13,7 @@ class EnhancedPokemonWrapper:
         'frame': int,  # Current frame number
         'state': str,  # Game state: "default", "menu", "dialog", "scripted"
         'is_in_battle': bool,  # Whether the player is currently in a battle
-        'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", etc.
+        'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", "left", "right", "start", "select"
         'screen': str,  # Base64-encoded JPEG image of the current screen
 
         'map': {
@@ -144,7 +144,7 @@ class EnhancedPokemonWrapper:
             'last_button': 'start'
             }
         self.logger = Logger()
-          
+        
     def __str__(self):
         """Return a string representation of the current game state."""
         # Capture the output of print_game_state in a string
@@ -263,10 +263,13 @@ class EnhancedPokemonWrapper:
             
             # Print Log Info:
             print(f"\n=== LOG VIEW ===")
-            print(f"Recent Logs: {print(self.logger)}")
+            print(f"Recent Logs: {self.logger}")
 
         return f.getvalue()
     
+    def record_button_input(self, cmd_data):
+        self.data['last_button'] = cmd_data
+
     def update(self, frame):
         """
         Update self.data with comprehensive error handling to catch and report issues.
@@ -373,6 +376,38 @@ class EnhancedPokemonWrapper:
             import traceback
             traceback.print_exc()
 
+    def diff(self, old_state, new_state):
+        """
+        Compare two game states and return a simple diff of what changed.
+        
+        Args:
+            old_state (dict): The previous game state
+            new_state (dict): The current game state
+            
+        Returns:
+            dict: A dictionary containing only the elements that have changed
+        """
+        if not old_state or not new_state:
+            return new_state if new_state else {}
+        
+        # Create a diff by recursively finding differences between states
+        def diff_dicts(d1, d2):
+            changes = {}
+            # Keys in both dictionaries that have different values
+            for k in set(d1.keys()) & set(d2.keys()):
+                if isinstance(d1[k], dict) and isinstance(d2[k], dict):
+                    nested_diff = diff_dicts(d1[k], d2[k])
+                    if nested_diff:
+                        changes[k] = nested_diff
+                elif d1[k] != d2[k]:
+                    changes[k] = d2[k]
+            # Keys only in d2 (additions)
+            for k in set(d2.keys()) - set(d1.keys()):
+                changes[k] = d2[k]
+            return changes
+        
+        return diff_dicts(old_state, new_state)
+    
     def get_player_position(self):
         """
         Get the player's current position on the map.
@@ -751,14 +786,13 @@ class EnhancedPokemonWrapper:
         Each warp entry in Pokemon Red/Blue contains:
         - Y-coordinate (1 byte)
         - X-coordinate (1 byte)
-        - Destination map ID (1 byte) [Not sure what this actually encodes, so I ignore it]
+        - Destination map ID (1 byte)
         - Destination warp ID (1 byte)
         
         Returns:
-            Dict: Dictionary containing warp information keyed by:
-                - position: (x, y) tuple of coordinates on the current map
-                With values:
-                - destination_warp_name: String name of the exact destination map (ex. ViridianPokemart)
+            Dict: Dictionary containing warp information with string keys:
+                - Keys: String representation of (x, y) coordinates, e.g., "5,8"
+                - Values: Destination map name
         """
         # Get number of warps on the current map
         warp_count = self.pyboy.memory[self.memory_addresses["WARPCOUNT"]]
@@ -766,7 +800,7 @@ class EnhancedPokemonWrapper:
         # Validate warp count (sanity check)
         if warp_count > 32 or warp_count < 0:  # 32 is a reasonable upper limit
             print(f"Warning: Invalid warp count: {warp_count}")
-            return []
+            return {}
         
         # Starting address of warp entries
         warps_addr = self.memory_addresses["WARPS"]
@@ -774,7 +808,7 @@ class EnhancedPokemonWrapper:
         # Size of each warp entry (4 bytes: y, x, dest_map, dest_warp_id)
         WARP_ENTRY_SIZE = 4
 
-        # Initialize warps list
+        # Initialize warps dictionary with string keys
         warps = {}
         
         # Read all warp entries
@@ -788,9 +822,12 @@ class EnhancedPokemonWrapper:
             dest_warp_id = self.pyboy.memory[entry_addr + 3]
             
             # Get destination map name
-            dest_warp_name = self.value_maps["maps"][dest_warp_id] if dest_warp_id < len(self.value_maps["maps"]) else f"Overworld"
-            # Create warp entry dictionary
-            warps[(x_coord, y_coord)] = dest_warp_name
+            dest_warp_name = self.value_maps["maps"][dest_warp_id] if dest_warp_id < len(self.value_maps["maps"]) else "Overworld"
+            
+            # Use string key instead of tuple
+            coord_key = f"{x_coord},{y_coord}"
+            warps[coord_key] = dest_warp_name
+        
         return warps
 
     def get_logical_tilemap(self):
@@ -998,7 +1035,7 @@ class EnhancedPokemonWrapper:
         for line in dialog_area:
             clean_line = line.strip()
             if clean_line and "▶" not in clean_line and clean_line != "▼":
-                current_dialog_text.append(clean_line.strip("▼"))
+                current_dialog_text.append(clean_line.strip("▼").strip())
         if len(current_dialog_text) > 0:
             result['dialog'] = current_dialog_text
         # Check if joypad input is being ignored (common during dialog)

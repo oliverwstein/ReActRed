@@ -115,7 +115,40 @@ class WebSocketServer:
                     self._send_state(client) for client in self.clients
                 ])
             await asyncio.sleep(0.1)  # Update rate
+    
+    def find_non_json_serializable_keys(self, dictionary):
+        """
+        Traverses a dictionary (including nested dictionaries) to find keys that are not JSON serializable.
+        
+        JSON serializable key types include: str, int, float, bool, None
+        
+        Args:
+            dictionary (dict): The dictionary to check
             
+        Returns:
+            list: A list of non-JSON serializable keys found
+        """
+        non_serializable_keys = []
+        
+        def is_json_serializable_key(key):
+            """Check if a key is JSON serializable"""
+            return isinstance(key, (str, int, float, bool)) or key is None
+        
+        def traverse_dict(d, path=""):
+            """Recursively traverse the dictionary"""
+            for key in d:
+                if not is_json_serializable_key(key):
+                    non_serializable_keys.append((path, key))
+                
+                # If the value is a dictionary, traverse it
+                if isinstance(d[key], dict):
+                    new_path = f"{path}.{key}" if path else str(key)
+                    traverse_dict(d[key], new_path)
+        
+        traverse_dict(dictionary)
+        return non_serializable_keys
+    
+
     async def _send_state(self, websocket):
         """Send current game state to a client"""
         try:
@@ -126,7 +159,6 @@ class WebSocketServer:
                 "type": "state_update",
                 "state": self.wrapper.data
             }
-            
             await websocket.send(json.dumps(message))
         except Exception as e:
             print(f"Error sending state to client: {e}")
@@ -238,12 +270,12 @@ def run_game(rom_path, memory_addresses_path, memory_values_path, stop_event):
                 if cmd_type == "button":
                     # Use pyboy.button with 24 frames duration for consistent button presses
                     pyboy.button(cmd_data, 24)
-                    print(cmd_data)
-                    enhanced_wrapper.data['last_button'] = cmd_data
+                    enhanced_wrapper.record_button_input(cmd_data)
 
             # Process a frame
             pyboy.tick()
             frame_count += 1
+            
             enhanced_wrapper.update(frame_count)
             # Update game state (every 24 frames)
             if frame_count % 24 == 0:
