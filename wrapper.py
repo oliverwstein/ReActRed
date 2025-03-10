@@ -147,7 +147,6 @@ class EnhancedPokemonWrapper:
         
     def __str__(self):
         """Return a string representation of the current game state."""
-        # Capture the output of print_game_state in a string
         import io
         from contextlib import redirect_stdout
         
@@ -311,7 +310,7 @@ class EnhancedPokemonWrapper:
                 scripted_sequence = joy_ignore != 0
                 
                 # Determine the primary state based on priorities
-                if scripted_sequence:
+                if scripted_sequence and not self.data['text'].get("dialog", False):
                     self.data['state'] = 'scripted'
                 elif menu_active:
                     self.data['state'] = 'menu'
