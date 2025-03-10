@@ -281,8 +281,8 @@ class Blackboard:
         # Update graph - add or update node for current position
         if not self.world_graph.has_node(node_id):
             self.world_graph.add_node(node_id, 
-                                      map=map_name,
-                                      visited=True)
+                                    map=map_name,
+                                    visited=True)
         else:
             # Mark as visited
             self.world_graph.nodes[node_id]['visited'] = True
@@ -310,15 +310,22 @@ class Blackboard:
         if 'viewport' in self.game_state and 'tiles' in self.game_state['viewport']:
             tiles = self.game_state['viewport']['tiles']
             if tiles:
-                # Player is typically in the center of the viewport
-                center_y = len(tiles) // 2
-                center_x = len(tiles[0]) // 2
+                # Player is at position [4,4] in the MAP VIEW, but has coordinates (x,y) in the game
+                # We need to adjust for this offset when mapping viewport tiles to world coordinates
+                
+                # Get the offset between player's game coordinates and their position in the viewport
+                viewport_center_x = 4  # Player's x position in MAP VIEW
+                viewport_center_y = 4  # Player's y position in MAP VIEW
+                
+                # Calculate the offset between game coordinates and viewport
+                offset_x = x - viewport_center_x
+                offset_y = y - viewport_center_y
                 
                 for dy in range(len(tiles)):
                     for dx in range(len(tiles[0])):
-                        # Calculate map coordinates
-                        map_x = x + (dx - center_x)
-                        map_y = y + (dy - center_y)
+                        # Calculate map coordinates by adding offset to viewport coordinates
+                        map_x = dx + offset_x
+                        map_y = dy + offset_y
                         tile_code = tiles[dy][dx]
                         
                         # Skip "#" tiles - they're not part of the map
@@ -331,9 +338,9 @@ class Blackboard:
                         if not self.world_graph.has_node(tile_node):
                             # New node
                             self.world_graph.add_node(tile_node,
-                                                     map=map_name,
-                                                     tile_code=tile_code,
-                                                     visited=(map_x==x and map_y==y))
+                                                    map=map_name,
+                                                    tile_code=tile_code,
+                                                    visited=(map_x==x and map_y==y))
                         else:
                             # Existing node - update tile code
                             self.world_graph.nodes[tile_node]['tile_code'] = tile_code
@@ -343,7 +350,6 @@ class Blackboard:
                                 self.world_graph.nodes[tile_node]['visited'] = True
         
         logger.debug(f"Recorded movement: {position}")
-        
     def record_dialog(self, dialog_text):
         """
         Record dialog text with intelligent handling of continuations.
@@ -454,6 +460,7 @@ class Blackboard:
                     dialog['text'] = new_text
                     dialog['frame'] = current_frame
                     return
+                
     def record_menu(self, menu_state):
         """Record menu interaction"""
         current_frame = self.game_state.get("frame", 0)

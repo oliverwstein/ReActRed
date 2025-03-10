@@ -22,16 +22,16 @@ class InteractiveMode:
     def __init__(self):
         self.valid_buttons = ["up", "down", "left", "right", "a", "b", "start", "select"]
         self.help_text = """
-Available commands:
-  up, down, left, right, a, b, start, select - Press the specified button
-  dialog [n]         - Show last n dialog entries (default: 5)
-  query [text]       - Search journal for entries containing text
-  path [map] [x] [y] - Find path to destination
-  loc [map]          - List visited locations (optionally filtered by map)
-  pos                - Show current position and map info
-  state              - Show detailed current game state (useful after actions)
-  help               - Show this help message
-"""
+            Available commands:
+            up, down, left, right, a, b, start, select - Press the specified button
+            dialog [n]         - Show last n dialog entries (default: 5)
+            query [text]       - Search journal for entries containing text
+            path [map] [x] [y] - Find path to destination
+            loc [map]          - List visited locations (optionally filtered by map)
+            pos                - Show current position and map info
+            state              - Show detailed current game state (useful after actions)
+            help               - Show this help message
+            """
         self.last_button = None
     
     async def get_menu_action(self, blackboard):
@@ -268,21 +268,75 @@ Available commands:
                 logger.info(f"  {map_name}: {len(positions)} positions")
     
     async def _show_position(self, blackboard):
-        """Show current player position and map"""
+        """Show current player position and map based on explored areas"""
         position = blackboard.game_state.get("player", {}).get("position", (0, 0, "Unknown"))
         map_name = blackboard.game_state.get("map", {}).get("name", "Unknown")
         
         x, y, facing = position
         logger.info(f"Current position: ({x}, {y}) facing {facing} in {map_name}")
         
-        # Show surrounding tiles if available
-        if 'viewport' in blackboard.game_state and 'tiles' in blackboard.game_state['viewport']:
-            tiles = blackboard.game_state['viewport']['tiles']
-            if tiles:
-                logger.info("Surrounding tiles:")
-                for row in tiles:
-                    logger.info("  " + " ".join(row))
+        # Collect all explored tiles for the current map
+        explored_tiles = {}
+        
+        for node_id, data in blackboard.world_graph.nodes(data=True):
+            node_map, node_x, node_y = node_id
+            if node_map == map_name:
+                if node_x == x and node_y == y:
+                    tile_code = '@'
+                else:
+                    tile_code = data.get('tile_code', '?')
+                explored_tiles[(node_x, node_y)] = tile_code
+        
+        if not explored_tiles:
+            logger.info("No map data available for this area yet.")
+            return
+        
+        # Calculate the bounds of what we've seen
+        tile_coords = list(explored_tiles.keys())
+        min_x = min(tx for tx, _ in tile_coords)
+        max_x = max(tx for tx, _ in tile_coords)
+        min_y = min(ty for _, ty in tile_coords)
+        max_y = max(ty for _, ty in tile_coords)
+        
+        # Create a grid representing the area we've seen
+        map_grid = []
+        for y_pos in range(min_y, max_y + 1):
+            row = []
+            for x_pos in range(min_x, max_x + 1):
+                coord = (x_pos, y_pos)
+                if coord in explored_tiles:
+                    row.append(explored_tiles[coord])
+                else:
+                    row.append('?')  # Use '?' for tiles we haven't seen
+            map_grid.append(row)
             
+        # Display the map
+        logger.info(f"Map of {map_name} (explored areas):")
+        for row in map_grid:
+            logger.info("  " + " ".join(row))
+        
+        # Add information about the map coordinates
+        logger.info(f"Map coordinates: Player @ ({x},{y}) in explored area from ({min_x},{min_y}) to ({max_x},{max_y})")
+        logger.info(f"Legend: @ = Player position, ? = Unexplored, 0 = Walkable, W = Water, T = Tree, G = Grass, v/</>= Ledges")
+        
+        # Add nearby entities information
+        if 'viewport' in blackboard.game_state and 'entities' in blackboard.game_state['viewport']:
+            entities = blackboard.game_state['viewport']['entities']
+            if entities:
+                logger.info("Nearby entities:")
+                for entity in entities:
+                    entity_name = entity.get('name', 'Unknown')
+                    entity_x = entity['position']['x']
+                    entity_y = entity['position']['y']
+                    logger.info(f"  • {entity_name} at ({entity_x}, {entity_y})")
+        
+        # Add nearby warps information
+        warps = blackboard.game_state.get('map', {}).get('warps', {})
+        if warps:
+            logger.info("Nearby warps:")
+            for coords, destination in warps.items():
+                logger.info(f"  • {coords} → {destination}")
+                    
     async def _show_state(self, blackboard):
         """Show detailed information about the current game state in the same format as wrapper.__str__"""
         game_state = blackboard.game_state
@@ -394,7 +448,7 @@ Available commands:
         if game_state['state'] == 'default' and not game_state['is_in_battle'] and game_state['viewport'].get('tiles'):
             print(f"\n=== MAP VIEW ===")
             map_with_player = game_state['viewport']['tiles']
-            map_with_player[5][4] = '@'
+            map_with_player[4][4] = '@'
             for row in map_with_player:
                 print('  ' + ' '.join(row))
                 
