@@ -416,162 +416,6 @@ class FileWriteTool(BaseTool):
                 "path": file_path
             }
 
-class AgentTool(BaseTool):
-    """Tool for running AI agents to handle complex reasoning or vision tasks"""
-    def __init__(self, config_path):
-        """
-        Args:
-            config_path: Path to configuration file containing API keys
-        """
-        super().__init__("agent", "Delegates complex tasks to AI models including vision analysis")
-        
-        # Load configuration file containing API keys
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-            
-        # Initialize API clients
-        self.gemini_client = self._init_gemini_client()
-    
-    def _init_gemini_client(self):
-        """Initialize the Gemini API client"""
-        import google.generativeai as genai
-        try:
-            genai.configure(api_key=self.config["api_keys"]["gemini"])
-            return genai
-        except Exception as e:
-            logging.error(f"Failed to initialize Gemini client: {str(e)}")
-            return None
-    
-    def execute(self, task, **kwargs):
-        """Run an AI model to complete a task
-        
-        Args:
-            task (str): Description of the task or prompt for the AI
-            model (str, optional): Which model to use (default: "flash")
-            image (ndarray, optional): Image data for vision tasks
-            temperature (float, optional): Sampling temperature (default: 0.3)
-            max_tokens (int, optional): Maximum tokens to generate (default: 1000)
-            timeout (float, optional): Maximum time to wait for response in seconds (default: 60)
-            
-        Returns:
-            dict: Result containing the AI's response
-        """
-        model = kwargs.get("model", "flash")
-        image = kwargs.get("image", None)
-        temperature = kwargs.get("temperature", 0.3)
-        max_tokens = kwargs.get("max_tokens", 4000)
-        timeout = kwargs.get("timeout", 60)
-        
-        result = {
-            "success": False,
-            "model": model,
-            "task": task,
-            "response": None,
-            "error": None
-        }
-        
-        try:
-            # Convert image if provided
-            images = []
-            if image is not None:
-                from PIL import Image as PILImage
-                import numpy as np
-                if isinstance(image, np.ndarray):
-                    images = [PILImage.fromarray(np.uint8(image))]
-                else:
-                    images = [image]
-            
-            # Determine model ID based on parameter
-            model_id = "gemini-2.0-flash"  # Default flash model
-            if model == "pro":
-                model_id = "gemini-2.0-pro-exp-02-05"
-            
-            # Call the appropriate model
-            response = self._call(model_id, task, images, temperature, max_tokens, timeout)
-            
-            result["success"] = True
-            result["response"] = response
-            return result
-                
-        except Exception as e:
-            result["error"] = str(e)
-            return result
-    
-    def _call(self, model_id, prompt, images, temperature, max_tokens, timeout):
-        """Make a call to Gemini API with retry logic
-        
-        Args:
-            model_id (str): Gemini model identifier
-            prompt (str): Text prompt
-            images (list): List of PIL images (can be empty)
-            temperature (float): Sampling temperature
-            max_tokens (int): Maximum tokens to generate
-            timeout (float): Timeout in seconds
-            
-        Returns:
-            str: Model response text
-        """
-        import time
-        import concurrent.futures
-        
-        if not self.gemini_client:
-            raise Exception("Gemini client not initialized")
-        
-        max_retries = 2
-        retry_delay = 30  # seconds
-        
-        # Function to make the actual API call
-        def make_api_call():
-            model = self.gemini_client.GenerativeModel(model_id)
-            
-            # Build the content array (prompt + images)
-            content = [prompt] + images
-            
-            # Configure safety settings
-            safety_settings = {
-                self.gemini_client.types.HarmCategory.HARM_CATEGORY_HARASSMENT: 
-                    self.gemini_client.types.HarmBlockThreshold.BLOCK_NONE,
-                self.gemini_client.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: 
-                    self.gemini_client.types.HarmBlockThreshold.BLOCK_NONE,
-                self.gemini_client.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: 
-                    self.gemini_client.types.HarmBlockThreshold.BLOCK_NONE,
-                self.gemini_client.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: 
-                    self.gemini_client.types.HarmBlockThreshold.BLOCK_NONE,
-            }
-            
-            # Generate content
-            response = model.generate_content(
-                content,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens
-                },
-                safety_settings=safety_settings
-            )
-            
-            return response.text
-        
-        # Implement retry logic
-        for attempt in range(max_retries + 1):
-            try:
-                # Use a timeout to prevent hanging
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(make_api_call)
-                    response = future.result(timeout=timeout)
-                    return response
-                    
-            except concurrent.futures.TimeoutError:
-                raise Exception(f"API request timed out after {timeout} seconds")
-                
-            except Exception as e:
-                if attempt < max_retries:
-                    logging.warning(f"Attempt {attempt + 1} failed with error: {str(e)}. Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    logging.error(f"All {max_retries + 1} attempts failed. Last error: {str(e)}")
-                    raise
-
 def main():
     # Create a ToolManager instance
     tool_manager = ToolManager()
@@ -585,9 +429,6 @@ def main():
     tool_manager.register_tool(FileWriteTool())
     tool_manager.register_tool(FileEditTool())
     
-    # Initialize AgentTool (requires config.json from the previous example)
-    tool_manager.register_tool(AgentTool('config.json'))
-
     # Example usage of different tools
 
     # 1. List available tools
@@ -639,15 +480,6 @@ def main():
     bash_result = tool_manager.execute_tool('bash', 'echo "Hello from bash tool!"')
     print("\nBash Command Result:")
     print(bash_result['stdout'])
-
-    # 9. AI Agent Tool
-    task = f"Explain the interaction between the threading and the server in this file: {tool_manager.execute_tool('read', 'game.py').get("content")}"
-    agent_result = tool_manager.execute_tool('agent', 
-        task=task, 
-        model='flash'
-    )
-    print("\nAgent Result:")
-    print(agent_result['response'])
 
 if __name__ == '__main__':
     main()
