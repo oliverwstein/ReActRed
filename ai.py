@@ -16,6 +16,7 @@ import websockets
 from enum import Enum
 from abc import ABC, abstractmethod
 from collections import deque
+import networkx as nx
 
 # Set up logging
 logging.basicConfig(
@@ -30,8 +31,6 @@ class Status(Enum):
     FAILURE = 2
     RUNNING = 3
 
-# Behavior Tree Base Nodes
-
 class Node(ABC):
     """Base class for behavior tree nodes"""
     
@@ -43,7 +42,7 @@ class Node(ABC):
     async def run(self, blackboard):
         """Run the node's behavior and return a Status"""
         pass
-
+    
 class Composite(Node):
     """Base class for composite nodes that have children"""
     
@@ -469,6 +468,9 @@ class Blackboard:
         self.current_state_entered = 0
         self.current_state = None
         
+        self.world_graph = nx.Graph()
+
+        
     def can_input(self, current_frame):
         """Check if we can send input based on cooldown"""
         frames_elapsed = current_frame - self.last_input_frame
@@ -505,63 +507,130 @@ class Blackboard:
             self.current_state_entered = frame
             logger.info(f"Entered {new_state} state at frame {frame}")
     
+    def record_movement(self, position):
+        """Record player movement and update the world graph"""
+        current_frame = self.game_state.get("frame", 0)
+        map_name = self.game_state.get("map", {}).get("name", "Unknown")
+        x, y, facing = position
+        node_id = (map_name, x, y)
+        
+        # Create journal entry
+        entry = {
+            "frame": current_frame,
+            "position": position,
+            "map": map_name
+        }
+        self.movement_history.append(entry)
+        self.journal.append({
+            "type": "movement",
+            "frame": current_frame,
+            "data": entry
+        })
+        
+        # Update graph - add or update node for current position
+        if not self.world_graph.has_node(node_id):
+            self.world_graph.add_node(node_id, 
+                                    map=map_name,
+                                    visited=True)
+        else:
+            # Mark as visited
+            self.world_graph.nodes[node_id]['visited'] = True
+        
+        # Create edge between previous position and current position
+        if len(self.movement_history) > 1:
+            prev_entry = self.movement_history[-2]
+            prev_map = prev_entry["map"]
+            prev_x, prev_y, _ = prev_entry["position"]
+            prev_node = (prev_map, prev_x, prev_y)
+            
+            # Create edge between previous and current position
+            if prev_map == map_name:
+                # Same map - check if adjacent (Manhattan distance of 1)
+                dx = abs(x - prev_x)
+                dy = abs(y - prev_y)
+                if dx + dy == 1:
+                    self.world_graph.add_edge(prev_node, node_id)
+            else:
+                # Different maps - create edge regardless of position
+                # This represents doors, cave entrances, etc.
+                self.world_graph.add_edge(prev_node, node_id)
+        
+        # Update surrounding tiles based on viewport data
+        if 'viewport' in self.game_state and 'tiles' in self.game_state['viewport']:
+            tiles = self.game_state['viewport']['tiles']
+            if tiles:
+                # Player is typically in the center of the viewport
+                center_y = len(tiles) // 2
+                center_x = len(tiles[0]) // 2
+                
+                for dy in range(len(tiles)):
+                    for dx in range(len(tiles[0])):
+                        # Calculate map coordinates
+                        map_x = x + (dx - center_x)
+                        map_y = y + (dy - center_y)
+                        tile_code = tiles[dy][dx]
+                        
+                        # Skip "#" tiles - they're not part of the map
+                        if tile_code == "#":
+                            continue
+                        
+                        tile_node = (map_name, map_x, map_y)
+                        
+                        # Add or update node with tile information
+                        if not self.world_graph.has_node(tile_node):
+                            # New node
+                            self.world_graph.add_node(tile_node,
+                                                    map=map_name,
+                                                    tile_code=tile_code,
+                                                    visited=(map_x==x and map_y==y))
+                        else:
+                            # Existing node - update tile code
+                            self.world_graph.nodes[tile_node]['tile_code'] = tile_code
+                            
+                            # Only update visited status if we're standing on it and it wasn't visited before
+                            if map_x==x and map_y==y and not self.world_graph.nodes[tile_node].get('visited', False):
+                                self.world_graph.nodes[tile_node]['visited'] = True
+        
+        logger.debug(f"Recorded movement: {position}")
+        
     def record_dialog(self, dialog_text):
-        """Record dialog text"""
+        """Record dialog text and associate with current location"""
         if not dialog_text:
             return
             
         current_frame = self.game_state.get("frame", 0)
-        logger.info(dialog_text)
-        # Avoid duplicates by checking if the last entry is identical
-        if (not self.dialog_history):
-            entry = {
-                "frame": current_frame,
-                "text": dialog_text
-            }
-            self.dialog_history.append(entry)
-            self.journal.append({
-                "type": "dialog",
-                "frame": current_frame,
-                "data": dialog_text
-            })
-            logger.debug(f"Recorded dialog: {dialog_text}")
-        else:
-            if self.dialog_history[-1]["text"][-1] == dialog_text[0]:
-                self.dialog_history[-1]["text"].append(dialog_text[1])
-            else:
-                entry = {
-                    "frame": current_frame,
-                    "text": dialog_text
-                }
-                self.dialog_history.append(entry)
-                self.journal.append({
-                    "type": "dialog",
-                    "frame": current_frame,
-                    "data": dialog_text
-                })
-            logger.debug(f"Recorded dialog: {dialog_text}")
-            
-    def record_movement(self, position):
-        """Record player movement"""
-        current_frame = self.game_state.get("frame", 0)
         
-        # Avoid duplicates by checking if the last entry is identical
-        if (not self.movement_history or 
-            self.movement_history[-1]["position"] != position):
+        # Create journal entry
+        entry = {
+            "frame": current_frame,
+            "text": dialog_text
+        }
+        self.dialog_history.append(entry)
+        self.journal.append({
+            "type": "dialog",
+            "frame": current_frame,
+            "data": dialog_text
+        })
+        
+        # Find the current position from the latest movement entry
+        if self.movement_history:
+            latest_movement = self.movement_history[-1]
+            map_name = latest_movement["map"]
+            x, y, _ = latest_movement["position"]
+            node_id = (map_name, x, y)
             
-            entry = {
-                "frame": current_frame,
-                "position": position,
-                "map": self.game_state.get("map", {}).get("name", "Unknown")
-            }
-            self.movement_history.append(entry)
-            self.journal.append({
-                "type": "movement",
-                "frame": current_frame,
-                "data": entry
-            })
-            logger.debug(f"Recorded movement: {position}")
-    
+            if self.world_graph.has_node(node_id):
+                # Add dialog as node attribute
+                if 'dialogs' not in self.world_graph.nodes[node_id]:
+                    self.world_graph.nodes[node_id]['dialogs'] = []
+                
+                self.world_graph.nodes[node_id]['dialogs'].append({
+                    'frame': current_frame,
+                    'text': dialog_text
+                })
+        
+        logger.debug(f"Recorded dialog: {dialog_text}")
+        
     def record_menu(self, menu_state):
         """Record menu interaction"""
         current_frame = self.game_state.get("frame", 0)
