@@ -65,7 +65,12 @@ class WebSocketServer:
     async def _start_server(self):
         """Start the WebSocket server"""
         self.server = await websockets.serve(
-            self._handle_client, self.host, self.port
+            self._handle_client, 
+            self.host, 
+            self.port,
+            ping_interval=None,  # Disable automatic pings
+            ping_timeout=None,   # Disable ping timeout
+            close_timeout=None   # Disable close timeout
         )
         print(f"WebSocket server started at ws://{self.host}:{self.port}")
         
@@ -269,7 +274,7 @@ def run_game(rom_path, memory_addresses_path, memory_values_path, stop_event):
                 cmd_type, cmd_data = command_queue.get_nowait()
                 if cmd_type == "button":
                     # Use pyboy.button with 24 frames duration for consistent button presses
-                    pyboy.button(cmd_data, 24)
+                    pyboy.button(cmd_data, 10)
                     enhanced_wrapper.record_button_input(cmd_data)
 
             # Process a frame

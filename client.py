@@ -581,7 +581,7 @@ class PokemonAIClient:
         except Exception as e:
             logger.error(f"Failed to connect: {e}")
             return False
-            
+
     async def run(self):
         """Main client loop focusing on stable state points"""
         if not self.ws:

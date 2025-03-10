@@ -284,67 +284,124 @@ Available commands:
                     logger.info("  " + " ".join(row))
             
     async def _show_state(self, blackboard):
-        """Show detailed information about the current game state"""
+        """Show detailed information about the current game state in the same format as wrapper.__str__"""
         game_state = blackboard.game_state
-        current_state = game_state.get('state', 'unknown')
         
-        logger.info(f"Current game state: {current_state}")
-        logger.info(f"Current phase: {blackboard.controller.current_phase.name if hasattr(blackboard, 'controller') else 'Unknown'}")
+        # Format the state information similar to wrapper.__str__
+        print(f"\n{'-' * 20} Frame: {game_state['frame']} {'-' * 20}")
+        print(f"State: {game_state['state']} | In Battle: {game_state['is_in_battle']} | Last Button: {game_state['last_button']}")
         
-        # Show different details based on the state
-        if current_state == "menu":
-            menu_state = game_state.get("text", {}).get("menu_state", {})
-            cursor_pos = menu_state.get("cursor_pos", (None, None))
-            cursor_text = menu_state.get("cursor_text", "None")
-            current_item = menu_state.get("current_item", -1)
-            max_item = menu_state.get("max_item", -1)
-            
-            logger.info(f"Menu details:")
-            logger.info(f"  Cursor position: {cursor_pos}")
-            logger.info(f"  Selected text: '{cursor_text}'")
-            logger.info(f"  Current item: {current_item+1} of {max_item+1}")
-            
-            # Show all visible text lines
-            text_lines = game_state.get("text", {}).get("lines", [])
-            if text_lines:
-                logger.info("Visible text:")
-                for line in text_lines:
-                    logger.info(f"  {line}")
-            
-        elif current_state == "dialog":
-            dialog_text = game_state.get("text", {}).get("dialog", [])
-            
-            logger.info(f"Dialog text:")
-            for line in dialog_text:
-                logger.info(f"  {line}")
+        # Map information
+        print(f"\n=== MAP INFO ===")
+        print(f"Current Map: {game_state['map']['name']}")
+        print(f"Tileset: {game_state['map']['tileset']['name']}")
+        print(f"Dimensions: {game_state['map']['dimensions']}")
+        
+        # Player information
+        print(f"\n=== PLAYER INFO ===")
+        player_x, player_y, facing = game_state['player']['position']
+        print(f"Position: ({player_x}, {player_y}) Facing: {facing}")
+        print(f"Money: {game_state['player']['money']} ₽")
+        print(f"Badges: {', '.join(game_state['player']['badges']) if game_state['player']['badges'] else 'None'}")
+        print(f"Pokédex: {game_state['player']['pokedex']['owned']} owned, {game_state['player']['pokedex']['seen']} seen")
+        
+        # Bag items
+        print(f"\n=== BAG ITEMS ===")
+        if game_state['player']['bag']:
+            for item_name, quantity in game_state['player']['bag']:
+                print(f"  • {item_name} x{quantity}")
+        else:
+            print("  • Empty bag")
+        
+        # Team information
+        print(f"\n=== TEAM POKÉMON ===")
+        if game_state['player']['team'] and game_state['player']['team'].get('pokemon'):
+            for pokemon in game_state['player']['team']['pokemon']:
+                print(f"  • {pokemon.get('nickname', 'Unknown')} ({pokemon.get('species_id', 'Unknown')}) Lv.{pokemon.get('level', '?')}")
+                print(f"    HP: {pokemon.get('current_hp', '?')}/{pokemon.get('max_hp', '?')} | Status: {pokemon.get('status', 'Unknown')}")
+                print(f"    Types: {', '.join(filter(None, pokemon.get('types', ['Unknown'])))}")
+                print(f"    Moves: {', '.join(pokemon.get('moves', ['None']))}")
                 
-        elif current_state == "default":
-            # Show player position and map
-            position = game_state.get("player", {}).get("position", (0, 0, "Unknown"))
-            map_name = game_state.get("map", {}).get("name", "Unknown")
+                # Print stats in a compact format
+                if 'stats' in pokemon:
+                    stats = pokemon['stats']
+                    stats_str = " | ".join([f"{k}: {v}" for k, v in stats.items()])
+                    print(f"    Stats: {stats_str}")
+        else:
+            print("  • No Pokémon in team")
+        
+        # Map entities (NPCs, etc.)
+        print(f"\n=== MAP ENTITIES ===")
+        if game_state['viewport']['entities']:
+            for entity in game_state['viewport']['entities']:
+                print(f"  • {entity.get('name', 'Unknown')} @ ({entity['position']['x']}, {entity['position']['y']}) - {entity.get('state', 'Unknown')}")
+        else:
+            print("  • No visible entities")
+        
+        # Map warps
+        if game_state['map']['warps']:
+            print(f"\n=== MAP WARPS ===")
+            for coords, destination in game_state['map']['warps'].items():
+                print(f"  • Warp @ {coords} → {destination}")
+        
+        # Battle information
+        if game_state['is_in_battle']:
+            print(f"\n{'=' * 20} BATTLE {'=' * 20}")
+            battle = game_state['battle']
             
-            x, y, facing = position
-            logger.info(f"Position: ({x}, {y}) facing {facing} in {map_name}")
+            # Battle type
+            battle_type = "Trainer Battle" if battle.get("is_trainer_battle", False) else "Wild Encounter"
+            print(f"Type: {battle_type}")
             
-            # Show entities if available
-            entities = game_state.get("viewport", {}).get("entities", [])
-            if entities:
-                logger.info(f"Visible entities ({len(entities)}):")
-                for entity in entities[:5]:  # Limit to 5 entities
-                    entity_pos = entity.get('position', {'x': '?', 'y': '?'})
-                    logger.info(f"  {entity.get('name', 'Unknown')} at ({entity_pos.get('x', '?')}, {entity_pos.get('y', '?')})")
+            # Player's active Pokémon
+            if game_state['player']['team'] and len(game_state['player']['team']['pokemon']) > 0:
+                active_pokemon = game_state['player']['team']['pokemon'][0]
+                print(f"\nPLAYER POKÉMON:")
+                print(f"  • {active_pokemon.get('nickname', 'Unknown')} ({active_pokemon.get('species_id', 'Unknown')}) Lv.{active_pokemon.get('level', '?')}")
+                print(f"    HP: {active_pokemon.get('current_hp', '?')}/{active_pokemon.get('max_hp', '?')} | Status: {active_pokemon.get('status', 'Unknown')}")
+            
+            # Enemy Pokémon
+            if 'enemy_pokemon' in battle:
+                enemy = battle['enemy_pokemon']
+                print(f"\nENEMY POKÉMON:")
+                print(f"  • {enemy.get('nickname', enemy.get('species_name', 'Unknown'))} ({enemy.get('species_name', 'Unknown')}) Lv.{enemy.get('level', '?')}")
+                print(f"    HP: {enemy.get('hp_percent', '?')}% | Status: {enemy.get('status', 'Unknown')}")
+                print(f"    Types: {', '.join(filter(None, enemy.get('types', ['Unknown'])))}")
+            
+            # Turn counter
+            if 'turn_counter' in battle:
+                print(f"\nTurn: {battle['turn_counter'] + 1}")
+        
+        # Menu information
+        menu_state = game_state['text'].get('menu_state', {})
+        if menu_state.get('cursor_pos') is not None:
+            print(f"\n=== VISIBLE TEXT ===")
+            for line in game_state['text'].get("lines"):
+                print(f"  {line}")
+            print(f"\n=== MENU INFO ===")
+            cursor_pos = menu_state.get('cursor_pos', ('?', '?'))
+            print(f"  Cursor Position: {cursor_pos}")
+            if menu_state.get('cursor_text'):
+                print(f"  Selected Text: '{menu_state['cursor_text']}'")
+        
+        # Text and dialog information
+        if game_state['text']['dialog'] and game_state['state'] != 'menu':
+            print(f"\n=== DIALOG ===")
+            for line in game_state['text']['dialog']:
+                print(f"  {line}")
+                    
+        # Tilemap visualization
+        if game_state['state'] == 'default' and not game_state['is_in_battle'] and game_state['viewport'].get('tiles'):
+            print(f"\n=== MAP VIEW ===")
+            map_with_player = game_state['viewport']['tiles']
+            map_with_player[5][4] = '@'
+            for row in map_with_player:
+                print('  ' + ' '.join(row))
                 
-                if len(entities) > 5:
-                    logger.info(f"  ... and {len(entities) - 5} more entities")
-                    
-        # Show game stability info
-        logger.info(f"Game state stable: {blackboard.stable_state}")
-        logger.info(f"Stability counter: {blackboard.stability_counter}/{blackboard.required_stability_frames}")
-                    
         # Also show last button press for context
         if self.last_button:
-            logger.info(f"Last button press: {self.last_button}")
-            logger.info(f"Frames since last button: {game_state.get('frame', 0) - blackboard.last_button_frame}")
+            print(f"Last button press: {self.last_button}")
+            print(f"Frames since last button: {game_state.get('frame', 0) - blackboard.last_button_frame}")
     
     async def _process_command(self, command, blackboard):
         """Process user command and take appropriate action"""
