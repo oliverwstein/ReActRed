@@ -2,8 +2,6 @@ import base64
 
 import cv2
 
-from log import Logger
-
 class EnhancedPokemonWrapper:
     """
     Enhanced wrapper for Pokemon Red/Blue games that extracts additional data
@@ -143,7 +141,6 @@ class EnhancedPokemonWrapper:
             'player': {},
             'last_button': 'start'
             }
-        self.logger = Logger()
         
     def __str__(self):
         """Return a string representation of the current game state."""
@@ -259,10 +256,6 @@ class EnhancedPokemonWrapper:
                 print(f"\n=== MAP VIEW ===")
                 for row in self.data['viewport']['tiles']:
                     print('  ' + ' '.join(row))
-            
-            # Print Log Info:
-            print(f"\n=== LOG VIEW ===")
-            print(f"Recent Logs: {self.logger}")
 
         return f.getvalue()
     
@@ -368,7 +361,6 @@ class EnhancedPokemonWrapper:
                     'bag': [],
                     'team': {'count': 0, 'pokemon': []}
                 }
-            self.logger.log_update(self)
 
         except Exception as e:
             print(f"CRITICAL ERROR in update method: {e}")
