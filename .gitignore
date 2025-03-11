@@ -9,3 +9,4 @@
 /world_graph.py
 /.venv
 *.sh
+logs/
