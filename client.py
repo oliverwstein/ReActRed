@@ -18,12 +18,13 @@ import random
 import websockets
 from enum import Enum, auto
 import networkx as nx
+from agent import ReactAgent
 from interface import InteractiveMode
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(name)s - %(levelname)s - %(message)s',
+    format='%(message)s',
 )
 logger = logging.getLogger("PokemonAI")
 
@@ -78,10 +79,7 @@ class Blackboard:
         self.last_button_frame = current_frame
         
         # Record the action
-        self.record_action(button)
-        
-        # logger.info(f"Sent {button}, waiting for state to stabilize")
-        
+        self.record_action(button)        
         # Reset stability tracking after sending input
         self.stability_counter = 0
         self.stable_state = False
@@ -124,7 +122,7 @@ class Blackboard:
             # Reset stability counter
             self.stability_counter = 0
             self.stable_state = False
-            logger.debug(f"Content changed within {state_type} state, reset stability")
+            # logger.debug(f"Content changed within {state_type} state, reset stability")
         
         # Update current state type
         self.current_state_type = state_type
@@ -134,8 +132,6 @@ class Blackboard:
             self.stability_counter += 1
             if self.stability_counter >= self.required_stability_frames:
                 if not self.stable_state:
-                    # logger.info(f"Entered stable {state_type} state")
-                    # logger.info(f"State {state_type} is now stable after {self.stability_counter} frames")
                     self.stable_state = True
         else:
             # Reset stability counter if state is not stable
@@ -184,11 +180,9 @@ class Blackboard:
                 "exited_frame": frame,
                 "duration": duration
             })
-            # logger.info(f"Exited {self.current_state_type} state after {duration} frames")
         
         # Record new state entry
         self.state_entered_frame = frame
-        # logger.info(f"Entered {new_state_type} state at frame {frame}")
     
     def is_state_stable(self, state_type):
         """
@@ -245,7 +239,8 @@ class Blackboard:
         if "player" in state and "position" in state["player"]:
             position = state["player"]["position"]
             map_name = state.get("map", {}).get("name", "Unknown")
-            self.record_movement(position, map_name)
+            if position[:2] != [0,0]:
+                self.record_movement(position, map_name)
             
         # Record dialog if available
         if "text" in state and "dialog" in state["text"] and state["text"]["dialog"]:
@@ -328,10 +323,6 @@ class Blackboard:
                         map_y = dy + offset_y
                         tile_code = tiles[dy][dx]
                         
-                        # Skip "#" tiles - they're not part of the map
-                        if tile_code == "#":
-                            continue
-                        
                         tile_node = (map_name, map_x, map_y)
                         
                         # Add or update node with tile information
@@ -350,6 +341,7 @@ class Blackboard:
                                 self.world_graph.nodes[tile_node]['visited'] = True
         
         logger.debug(f"Recorded movement: {position}")
+    
     def record_dialog(self, dialog_text):
         """
         Record dialog text with intelligent handling of continuations.
@@ -522,10 +514,11 @@ class Blackboard:
 class DecisionMaker:
     """Responsible for deciding which action to take based on game state"""
     
-    def __init__(self, blackboard, interactive=False):
+    def __init__(self, blackboard, interactive=False, agent=None):
         self.blackboard = blackboard
         self.interactive = interactive
-        self.interface = InteractiveMode() if interactive else None
+        # Pass agent to InteractiveMode
+        self.interface = InteractiveMode(agent) if interactive else None
     
     async def decide_action(self):
         """Decide what button to press based on the current state"""
@@ -561,17 +554,17 @@ class DecisionMaker:
         
         return None
 
-# Main client class
 class PokemonAIClient:
     """Client that connects to the plugin-server and focuses on stable state points"""
     
-    def __init__(self, host='localhost', port=8765, interactive=False):
+    def __init__(self, host='localhost', port=8765, interactive=False, agent=None):
         self.host = host
         self.port = port
         self.ws = None
         self.blackboard = None
         self.decision_maker = None
         self.interactive = interactive
+        self.agent = agent
         
     async def connect(self):
         """Connect to the WebSocket server"""
@@ -581,7 +574,8 @@ class PokemonAIClient:
         try:
             self.ws = await websockets.connect(uri)
             self.blackboard = Blackboard(self.ws)
-            self.decision_maker = DecisionMaker(self.blackboard, self.interactive)
+            # Pass agent to the DecisionMaker
+            self.decision_maker = DecisionMaker(self.blackboard, self.interactive, self.agent)
             
             logger.info("Connected to server")
             return True
@@ -595,11 +589,23 @@ class PokemonAIClient:
             if not await self.connect():
                 return
                 
+        prev_state_type = None
+        
         try:
             # Main loop
             while True:
                 # 1. Wait for and find a stable state
                 await self.wait_for_stable_state()
+                current_state_type = self.blackboard.current_state_type
+                
+                # Check if state type changed and clear sequence if needed
+                if prev_state_type is not None and prev_state_type != current_state_type:
+                    if self.interactive and self.decision_maker.interface and self.decision_maker.interface.button_sequence:
+                        logger.info(f"State changed from {prev_state_type} to {current_state_type}. Clearing button sequence.")
+                        self.decision_maker.interface.button_sequence = []
+                
+                # Update previous state for next iteration
+                prev_state_type = current_state_type
                 
                 # 2. Once stable, make a decision
                 button = await self.decision_maker.decide_action()
@@ -659,22 +665,23 @@ class PokemonAIClient:
                 # If there's an error, wait a bit before retrying
                 await asyncio.sleep(1.0)
 
-
-
-# Main entry point
 async def main():
     parser = argparse.ArgumentParser(description="Pokémon AI Client")
     parser.add_argument("--host", type=str, default="localhost", help="WebSocket server host")
     parser.add_argument("--port", type=int, default=8765, help="WebSocket server port")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--interactive", action="store_true", help="Enable interactive mode")
+    parser.add_argument("--agent", action="store_true", help="Use ReAct agent")
 
     args = parser.parse_args()
     
     if args.debug:
         logger.setLevel(logging.DEBUG)
     
-    client = PokemonAIClient(args.host, args.port, args.interactive)
+    # Create agent if requested
+    agent = ReactAgent() if args.agent else None
+    
+    client = PokemonAIClient(args.host, args.port, args.interactive, agent)
     await client.run()
 
 if __name__ == "__main__":
