@@ -68,9 +68,6 @@ class WebSocketServer:
             self._handle_client, 
             self.host, 
             self.port,
-            ping_interval=None,  # Disable automatic pings
-            ping_timeout=None,   # Disable ping timeout
-            close_timeout=None   # Disable close timeout
         )
         print(f"WebSocket server started at ws://{self.host}:{self.port}")
         
