@@ -62,15 +62,14 @@ class InteractiveMode:
             return button
             
         await self.show_journal_since_last_prompt(blackboard)
-        await self._show_menu_text(blackboard)
+        await self._show_state_custom(blackboard)
         menu_state = blackboard.game_state.get("text", {}).get("menu_state", {})
         cursor_text = menu_state.get("cursor_text", "")
-        current_item = menu_state.get("current_item", -1)
-        max_item = menu_state.get("max_item", -1)
+
         
         prompt_msg = f"INTERACTIVE MENU"
         if cursor_text:
-            prompt_msg += f" on '{cursor_text}' (item {current_item+1}/{max_item+1})"
+            prompt_msg += f" on '{cursor_text}'"
             
         # Add last button info if available
         if self.last_button:
@@ -101,7 +100,7 @@ class InteractiveMode:
             return button
             
         await self.show_journal_since_last_prompt(blackboard)
-        await self._show_surroundings(blackboard)
+        await self._show_state_custom(blackboard)
         position = blackboard.game_state.get("player", {}).get("position", (0, 0, "Null"))
         map_name = blackboard.game_state.get("map", {}).get("name", "Unknown")
         if position[2] != 'Null':
@@ -731,7 +730,7 @@ class InteractiveMode:
         
         # Add information about the map coordinates
         logger.info(f"Map coordinates: Player @ ({x},{y}) in explored area from ({min_x},{min_y}) to ({max_x},{max_y})")
-        logger.info(f"Legend: @ = Player position, E = Entity, W = Warp, ? = Unexplored, 0 = Walkable, W = Water, T = Tree, G = Grass, v/</>= Ledges")
+        logger.info(f"Legend: @ = Player position, ? = Unexplored, 1 = Walkable, 0 = Wall/Object, E = Entity, W = Water, T = Tree, G = Grass, v/</>= Ledges")
         
         # Add nearby entities information
         if 'viewport' in blackboard.game_state and 'entities' in blackboard.game_state['viewport']:
@@ -772,6 +771,271 @@ class InteractiveMode:
         else:
             logger.info("No movement entries found")
 
+    async def _map_pathfinder(self, blackboard):
+        position = blackboard.game_state.get("player", {}).get("position", (0, 0, "Unknown"))
+        map_name = blackboard.game_state.get("map", {}).get("name", "Unknown")
+        
+        x, y, facing = position
+        directions = {
+            "Up": (0, -1),
+            "Down": (0, 1),
+            "Left": (-1, 0),
+            "Right": (1, 0)
+        }
+        # Keep track of warp positions for checking adjacent # tiles
+        warp_positions = []
+        warp_destinations = {}
+        if 'map' in blackboard.game_state and 'warps' in blackboard.game_state['map']:
+            for coords_str, destination in blackboard.game_state['map']['warps'].items():
+                coords_parts = coords_str.split(',')
+                if len(coords_parts) == 2:
+                    warp_x, warp_y = int(coords_parts[0]), int(coords_parts[1])
+                    warp_positions.append((warp_x, warp_y))
+                    warp_destinations[(warp_x, warp_y)] = destination
+        
+        # Check each adjacent tile
+        for direction, (dx, dy) in directions.items():
+            adj_x, adj_y = x + dx, y + dy
+            adj_node_id = (map_name, adj_x, adj_y)
+            
+            # Default tile information
+            tile_info = "Unknown"
+            
+            # Check if this node exists in our graph
+            if blackboard.world_graph.has_node(adj_node_id):
+                tile_code = blackboard.world_graph.nodes[adj_node_id].get('tile_code', '?')
+                
+                # Check if this is a # tile adjacent to a warp - mark as ? instead
+                if tile_code == '#':
+                    # Check if any warp position is adjacent to this tile
+                    for warp_x, warp_y in warp_positions:
+                        # Calculate Manhattan distance to the warp
+                        if abs(adj_x - warp_x) + abs(adj_y - warp_y) <= 1:
+                            tile_code = '?'  # This # tile is adjacent to a warp, so mark as ?
+                            break
+                
+                tile_info = f"{tile_code} at ({adj_x},{adj_y})"
+                
+                # Highlight if this is the direction we're facing
+                if direction == facing:
+                    tile_info = f"{tile_info} ◄"
+            
+            # Check for entities at this position
+            entities = []
+            if 'viewport' in blackboard.game_state and 'entities' in blackboard.game_state['viewport']:
+                for entity in blackboard.game_state['viewport']['entities']:
+                    entity_x = entity['position']['x']
+                    entity_y = entity['position']['y']
+                    if entity_x == adj_x and entity_y == adj_y:
+                        entities.append(entity.get('name', 'Unknown Entity'))
+            
+            # Check for warps at this position
+            warps = []
+            if 'map' in blackboard.game_state and 'warps' in blackboard.game_state['map']:
+                for coords_str, destination in blackboard.game_state['map']['warps'].items():
+                    # Parse coordinates like "5,8" into a tuple (5,8)
+                    coords_parts = coords_str.split(',')
+                    if len(coords_parts) == 2:
+                        warp_x, warp_y = int(coords_parts[0]), int(coords_parts[1])
+                        if warp_x == adj_x and warp_y == adj_y:
+                            warps.append(destination)
+
+        # Track special obstacle positions
+        boulder_positions = []
+        tree_positions = []
+        water_positions = []
+        
+        # Create a walkability graph for standard pathfinding (no HMs required)
+        walkability_graph = nx.Graph()
+        
+        # Create graphs for different HM abilities
+        cut_graph = nx.Graph()  # Can use Cut
+        surf_graph = nx.Graph()  # Can use Surf
+        strength_graph = nx.Graph()  # Can use Strength
+        paths = {}
+        # Add all walkable nodes from the world graph that are on the current map
+        for node_id, data in blackboard.world_graph.nodes(data=True):
+            node_map, node_x, node_y = node_id
+            if node_map == map_name:
+                # Get the tile code to determine walkability
+                tile_code = data.get('tile_code', '#')
+                pos = (node_x, node_y)
+                
+                # Track special obstacles for HM checks
+                if tile_code == 'T':  # Tree
+                    tree_positions.append(pos)
+                elif tile_code == 'W':  # Water
+                    water_positions.append(pos)
+                
+                # Basic walkable tiles (no HMs needed)
+                is_walkable = (
+                    tile_code == '1' or
+                    tile_code == 'G' or
+                    (tile_code == 'D') or  # Doors are walkable
+                    pos in warp_positions  # Warp positions are walkable
+                )
+                
+                if is_walkable:
+                    walkability_graph.add_node(pos)
+                    cut_graph.add_node(pos)
+                    surf_graph.add_node(pos)
+                    strength_graph.add_node(pos)
+                
+                # Add tree nodes to cut graph
+                if tile_code == 'T':
+                    cut_graph.add_node(pos)
+                    
+                # Add water nodes to surf graph
+                if tile_code == 'W':
+                    surf_graph.add_node(pos)
+        
+        # Check for entities and handle appropriately
+        if 'viewport' in blackboard.game_state and 'entities' in blackboard.game_state['viewport']:
+            for entity in blackboard.game_state['viewport']['entities']:
+                entity_x = entity['position']['x']
+                entity_y = entity['position']['y']
+                entity_name = entity.get('name', 'Unknown Entity')
+                pos = (entity_x, entity_y)
+                
+                # Check if the entity is a boulder
+                is_boulder = 'Boulder' in entity_name
+                
+                # If it's a boulder, mark its position
+                if is_boulder:
+                    boulder_positions.append(pos)
+                    strength_graph.add_node(pos)  # Boulders are walkable with Strength
+                # Otherwise, remove the node if it's a stationary entity
+                elif entity.get('movement', {}).get('type', '') == 'stationary':
+                    if pos in walkability_graph:
+                        walkability_graph.remove_node(pos)
+                    if pos in cut_graph:
+                        cut_graph.remove_node(pos)
+                    if pos in surf_graph:
+                        surf_graph.remove_node(pos)
+                    if pos in strength_graph:
+                        strength_graph.remove_node(pos)
+        
+        # Add edges between adjacent walkable tiles for all graphs
+        for graph in [walkability_graph, cut_graph, surf_graph, strength_graph]:
+            for node_x, node_y in list(graph.nodes()):
+                # Check each adjacent position
+                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                    adj_x, adj_y = node_x + dx, node_y + dy
+                    adj_pos = (adj_x, adj_y)
+                    if adj_pos in graph:
+                        graph.add_edge((node_x, node_y), adj_pos)
+        
+        # Calculate shortest paths to warps
+        if warp_positions and (x, y) in walkability_graph:            
+            for warp_x, warp_y in warp_positions:
+                paths[f"{destination} Warp @ {warp_pos}"] = {}
+                # Skip the warp we're already on
+                if warp_x == x and warp_y == y:
+                    continue
+                
+                warp_pos = (warp_x, warp_y)
+                destination = warp_destinations.get(warp_pos, "Unknown")
+                
+                # Try to find a standard path first (no HMs required)
+                standard_path = None
+                try:
+                    if warp_pos in walkability_graph:
+                        standard_path = nx.shortest_path(walkability_graph, (x, y), warp_pos)
+                except nx.NetworkXNoPath:
+                    pass
+                
+                # If standard path found, use it
+                if standard_path:
+                    # Convert path to directions
+                    directions_to_warp = []
+                    for i in range(len(standard_path) - 1):
+                        x1, y1 = standard_path[i]
+                        x2, y2 = standard_path[i + 1]
+                        
+                        if x2 > x1:
+                            directions_to_warp.append("right")
+                        elif x2 < x1:
+                            directions_to_warp.append("left")
+                        elif y2 > y1:
+                            directions_to_warp.append("down")
+                        elif y2 < y1:
+                            directions_to_warp.append("up")
+                    paths[f"{destination} Warp @ {warp_pos}"]['standard'] = directions_to_warp
+                # If no standard path, try HM paths in order: Cut, Surf, Strength
+                else:
+                    # Try Cut path
+                    cut_path = None
+                    try:
+                        if warp_pos in cut_graph:
+                            cut_path = nx.shortest_path(cut_graph, (x, y), warp_pos)
+                    except nx.NetworkXNoPath:
+                        pass
+                    
+                    # Try Surf path
+                    surf_path = None
+                    try:
+                        if warp_pos in surf_graph:
+                            surf_path = nx.shortest_path(surf_graph, (x, y), warp_pos)
+                    except nx.NetworkXNoPath:
+                        pass
+                    
+                    # Try Strength path
+                    strength_path = None
+                    try:
+                        if warp_pos in strength_graph:
+                            strength_path = nx.shortest_path(strength_graph, (x, y), warp_pos)
+                    except nx.NetworkXNoPath:
+                        pass
+                    
+                    # Use the first available HM path
+                    if cut_path:
+                        directions_to_warp = []
+                        for i in range(len(standard_path) - 1):
+                            x1, y1 = standard_path[i]
+                            x2, y2 = standard_path[i + 1]
+                            
+                            if x2 > x1:
+                                directions_to_warp.append("right")
+                            elif x2 < x1:
+                                directions_to_warp.append("left")
+                            elif y2 > y1:
+                                directions_to_warp.append("down")
+                            elif y2 < y1:
+                                directions_to_warp.append("up")
+                        paths[f"{destination} Warp @ {warp_pos}"]['cut'] = directions_to_warp
+                    elif surf_path:
+                        directions_to_warp = []
+                        for i in range(len(standard_path) - 1):
+                            x1, y1 = standard_path[i]
+                            x2, y2 = standard_path[i + 1]
+                            
+                            if x2 > x1:
+                                directions_to_warp.append("right")
+                            elif x2 < x1:
+                                directions_to_warp.append("left")
+                            elif y2 > y1:
+                                directions_to_warp.append("down")
+                            elif y2 < y1:
+                                directions_to_warp.append("up")
+                        paths[f"{destination} Warp @ {warp_pos}"]['surf'] = directions_to_warp
+                    elif strength_path:
+                        directions_to_warp = []
+                        for i in range(len(standard_path) - 1):
+                            x1, y1 = standard_path[i]
+                            x2, y2 = standard_path[i + 1]
+                            
+                            if x2 > x1:
+                                directions_to_warp.append("right")
+                            elif x2 < x1:
+                                directions_to_warp.append("left")
+                            elif y2 > y1:
+                                directions_to_warp.append("down")
+                            elif y2 < y1:
+                                directions_to_warp.append("up")
+                        paths[f"{destination} Warp @ {warp_pos}"]['strength'] = directions_to_warp
+                    else:
+                        pass
+        
     async def _show_surroundings(self, blackboard):
         """Show what's immediately surrounding the player (adjacent tiles)"""
         position = blackboard.game_state.get("player", {}).get("position", (0, 0, "Unknown"))
@@ -996,9 +1260,7 @@ class InteractiveMode:
                             directions_to_warp.append("up")
                     
                     # Display the path - show first 5 steps with "..." if longer
-                    path_str = ",".join(directions_to_warp[:5])
-                    if len(directions_to_warp) > 5:
-                        path_str += "..."
+                    path_str = ",".join(directions_to_warp)
                     
                     logger.info(f"  • Warp to {destination} at ({warp_x}, {warp_y}): {len(standard_path)-1} steps")
                     logger.info(f"    Path: {path_str}")
@@ -1609,7 +1871,7 @@ class InteractiveMode:
         
         # Add information about the map coordinates
         logger.info(f"Map coordinates: From ({min_x},{min_y}) to ({max_x},{max_y})")
-        logger.info(f"Legend: @ = Player position, ? = Unexplored, 0 = Walkable, W = Water, T = Tree, G = Grass, v/</>= Ledges")
+        logger.info(f"Legend: @ = Player position, ? = Unexplored, 1 = Walkable, 0 = Wall/Object, E = Entity, W = Water, T = Tree, G = Grass, v/</>= Ledges")
         
         # If we're viewing the current map, show additional information
         if is_current_map:
@@ -1635,12 +1897,73 @@ class InteractiveMode:
         game_state = blackboard.game_state
         menu_state = game_state['text'].get('menu_state', {})
         if menu_state.get('cursor_pos') is not None:
-            logger.info(f"\n=== VISIBLE TEXT ===")
-            for line in game_state['text'].get("lines"):
+            logger.info(f"\n=== OCR ===")
+            for line in game_state['text'].get("OCR"):
                 logger.info(f"  {line}")
             logger.info(f"\n=== MENU INFO ===")
             cursor_pos = menu_state.get('cursor_pos', ('?', '?'))
             logger.info(f"  Cursor Position: {cursor_pos}")
+            if menu_state.get('cursor_text'):
+                logger.info(f"  Current Menu Option: '{menu_state['cursor_text']}'")
+
+    async def _show_state_custom(self, blackboard):
+        """Show detailed information about the current game state tailored for use by the LLM"""
+        game_state = blackboard.game_state
+        logger.info(f"State: {game_state['state']} | Last Button: {game_state['last_button']}")
+        if game_state['map']['dimensions'] != (0,0):
+            logger.info(f"\n=== MAP DATA ===")
+            logger.info(f"Current Map: {game_state['map']['name']}")
+            player_x, player_y, facing = game_state['player']['position']
+            if facing == 'Null':
+                facing = 'Up'
+            logger.info(f"You are facing: {facing}")
+            logger.info(f"Badges: {', '.join(game_state['player']['badges']) if game_state['player']['badges'] else 'None'}")
+
+        if game_state['is_in_battle']:
+            logger.info(f"\n=== BATTLE DATA ===")
+            battle = game_state['battle']
+            battle_type = "Trainer" if battle.get("is_trainer_battle", False) else "Wild"
+            logger.info(f"On turn {battle["turn_counter"]} of {battle_type} battle")
+            # Player's active Pokémon
+            if game_state['player']['team'] and len(game_state['player']['team']['pokemon']) > 0:
+                active_pokemon = game_state['player']['team']['pokemon'][0]
+                logger.info(f"\nPLAYER POKÉMON:")
+                logger.info(f"  • {active_pokemon.get('nickname', 'Unknown')} ({active_pokemon.get('species_id', 'Unknown')}) Lv.{active_pokemon.get('level', '?')}")
+                logger.info(f"    HP: {active_pokemon.get('current_hp', '?')}/{active_pokemon.get('max_hp', '?')} | Status: {active_pokemon.get('status', 'Unknown')}")
+            
+            # Enemy Pokémon
+            if 'enemy_pokemon' in battle:
+                enemy = battle['enemy_pokemon']
+                logger.info(f"\nENEMY POKÉMON:")
+                logger.info(f"  • {enemy.get('nickname', enemy.get('species_name', 'Unknown'))} ({enemy.get('species_name', 'Unknown')}) Lv.{enemy.get('level', '?')}")
+                logger.info(f"    HP: {enemy.get('hp_percent', '?')}% | Status: {enemy.get('status', 'Unknown')}")
+                logger.info(f"    Types: {', '.join(filter(None, enemy.get('types', ['Unknown'])))}")
+            
+        if game_state['player']['bag']:
+            logger.info(f"\n=== ITEM BAG DATA ===")
+            for item_name, quantity in game_state['player']['bag']:
+                logger.info(f"  • {item_name} x{quantity}")
+
+        if game_state['player']['team'] and game_state['player']['team'].get('pokemon'):
+            logger.info(f"\n=== TEAM DATA ===")
+            for pokemon in game_state['player']['team']['pokemon']:
+                logger.info(f"  • {pokemon.get('nickname', 'Unknown')} ({pokemon.get('species_id', 'Unknown')}) Lv.{pokemon.get('level', '?')}")
+                logger.info(f"    HP: {pokemon.get('current_hp', '?')}/{pokemon.get('max_hp', '?')} | Status: {pokemon.get('status', 'Unknown')}")
+                logger.info(f"    Types: {', '.join(filter(None, pokemon.get('types', ['Unknown'])))}")
+                logger.info(f"    Moves: {', '.join(pokemon.get('moves', ['None']))}")
+                
+                # logger.info stats in a compact format
+                if 'stats' in pokemon:
+                    stats = pokemon['stats']
+                    stats_str = " | ".join([f"{k}: {v}" for k, v in stats.items()])
+                    logger.info(f"    Stats: {stats_str}")
+
+        menu_state = game_state['text'].get('menu_state', {})
+        if menu_state.get('cursor_pos') is not None:
+            logger.info(f"\n=== OCR ===")
+            for line in game_state['text'].get("OCR"):
+                logger.info(f"  {line}")
+            logger.info(f"\n=== MENU INFO ===")
             if menu_state.get('cursor_text'):
                 logger.info(f"  Current Menu Option: '{menu_state['cursor_text']}'")
 
