@@ -67,6 +67,7 @@ class Blackboard:
     
     async def send_input(self, button):
         """Send input command to the server"""
+        button = button.lower()
         if button not in ["up", "down", "left", "right", "a", "b", "start", "select"]:
             logger.warning(f"Invalid button: {button}")
             return False
