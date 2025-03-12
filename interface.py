@@ -838,7 +838,7 @@ class InteractiveMode:
                             tile_code = '?'  # This # tile is adjacent to a warp, so mark as ?
                             break
                 
-                tile_info = tile_code
+                tile_info = f"{tile_code} at ({adj_x},{adj_y})"
                 
                 # Highlight if this is the direction we're facing
                 if direction == facing:
@@ -867,7 +867,7 @@ class InteractiveMode:
             # Combine information
             direction_info = f"  {direction}: {tile_info}"
             if entities:
-                direction_info += f" - Entity: {', '.join(entities)}"
+                direction_info += f" - Entity: {', '.join(entities)} [Press a to interact]"
             if warps:
                 direction_info += f" - Warp to: {', '.join(warps)}"
             
@@ -1750,14 +1750,15 @@ class InteractiveMode:
             logger.info(f"\n=== DIALOG ===")
             for line in game_state['text']['dialog']:
                 logger.info(f"  {line}")
-                    
-        # Tilemap visualization
-        if game_state['state'] == 'default' and not game_state['is_in_battle'] and game_state['viewport'].get('tiles'):
-            logger.info(f"\n=== MAP VIEW ===")
-            map_with_player = game_state['viewport']['tiles']
-            map_with_player[4][4] = '@'
-            for row in map_with_player:
-                logger.info('  ' + ' '.join(row))
+
+        # Commented out because I want the AI to use map for mapping.   
+        # # Tilemap visualization
+        # if game_state['state'] == 'default' and not game_state['is_in_battle'] and game_state['viewport'].get('tiles'):
+        #     logger.info(f"\n=== MAP VIEW ===")
+        #     map_with_player = game_state['viewport']['tiles']
+        #     map_with_player[4][4] = '@'
+        #     for row in map_with_player:
+        #         logger.info('  ' + ' '.join(row))
                 
         # Also show last button press for context
         if self.last_button:
@@ -1792,8 +1793,13 @@ class InteractiveMode:
         
         # Check if command is a button sequence
         if "," in command:
-            # Split the sequence and find the first 'a'
             buttons = [btn.strip() for btn in command.split(",")]
+            # Split the sequence and find the first 'a'
+            try:
+                a_index = buttons.index('a')
+                buttons = buttons[:a_index]  # Truncate sequence at 'a'
+            except ValueError:
+                pass # 'a' not found, process the whole sequence
             
             valid_sequence = all(btn in self.valid_buttons for btn in buttons)
 
