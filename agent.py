@@ -59,26 +59,19 @@ class ReactAgent:
             },
         ]
         
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config=generation_config,
-            safety_settings=safety_settings
-        )
-        
         system_prompt = self._get_system_prompt()
         logger.info(f"Loaded system prompt ({len(system_prompt)} characters)")
 
-        # Initialize chat with system prompt
-        self.chat = self.model.start_chat(history=[
-            {
-                "role": "user",
-                "parts": [system_prompt]
-            },
-            {
-                "role": "model",
-                "parts": ["I understand my role as a Pokémon game agent. I'll analyze the game logs and provide thoughtful commands to help you progress through the game. I'll explain my reasoning and focus on strategic gameplay. Let's start playing!"]
-            }
-        ])
+        # Create the model with system_instruction
+        self.model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+            system_instruction=system_prompt
+        )
+        
+        # Start chat without including system prompt in history
+        self.chat = self.model.start_chat(history=[])
         
         self.log_file = 'logs/pokemon_ai.log'
         self.last_log_position = 0
@@ -218,9 +211,10 @@ class ReactAgent:
                     * explore [options]: Automatically explore the current map
                         - Available options: see-only, interact-entities, interact-tiles
                         - Example: "explore interact-entities" to talk to all NPCs
-                - BUTTON SEQUENCES: You can enter multiple moves at once by separating them with commas
-                    * Example: "up, up, right, right" will queue these four movements
-                    * Sequences are useful for following paths to warps or entities
+                    * map will give you paths to entities and warps you've seen, as well as showing you the map.
+                    * explore will explore the map for you. Manual map exploration should only be for when you know exactly where you are and where you want to go.
+                    * If you want to go somewhere and map has no path to it, use explore.
+                    * When you enter a new map, start by exploring it!
                 - INTERACTION: 'a' to interact with what's in front of you, 'b' to cancel
                 - MENU: 'start' to access the main menu, 'select' for secondary function
                 
@@ -239,7 +233,18 @@ class ReactAgent:
                     * goal [text]: Sets a new goal
                     * complete [goal]: Marks a goal as completed
 
-                Start with your reasoning, then just the command.
+                OUTPUT FORMAT: 
+                1. SURROUNDINGS: Describe what you observe around you (entities, warps, obstacles)
+                2. DESTINATION: State where you want to go next and why
+                3. CONFIDENCE: Rate your map knowledge from 0-100%
+                * If below 80%, use either 'map' or 'explore'
+                4. NAVIGATION PLAN:
+                * For exploration: Use 'explore' command with appropriate options
+                * For known destinations: Use 'map' to find the optimal path
+                * For simple interactions with visible objects: Use directional commands followed by 'a'
+                * ONLY use manual movement when following a specific, short path to a visible destination
+
+                COMMAND: [your single command here]
                 """
         elif 'MENU' in last_line:
             # Extract the currently selected option
@@ -257,14 +262,9 @@ class ReactAgent:
                 menu_position = f"{current_item}/{total_items}"
             
             prompt = prompt + f"""
-            1. ANALYZE THE MENU CONTEXT: 
+            1. MENU CONTEXT: 
             - Currently selected option: {selected_option or "Unknown"}
             - Menu position: {menu_position or "Unknown"}
-            
-            2. MAKE A DECISION:
-            - Do you want to SELECT the current option? If so, use 'a'
-            - Do you want to CANCEL/GO BACK? If so, use 'b'
-            - Do you need to move to a DIFFERENT OPTION? If so, use 'up' or 'down'
 
             - INFORMATION COMMANDS:
                 * map: Shows the current map view
@@ -274,6 +274,7 @@ class ReactAgent:
                 * atlas: Displays all discovered maps and connections
                 * dialog: Shows recent conversation history
                 * notes: Displays your current notes and objectives
+                * help: See ALL possible commands, with context.
                 
             - NOTE-TAKING COMMANDS:
                 * note [text]: Adds a note to your journal
@@ -284,7 +285,22 @@ class ReactAgent:
             - What will happen if you select this option?
             - Is this choice aligned with your current goals?
 
-            Start with your reasoning, then output the command on a new line.
+            OUTPUT:
+            2. OPTIONS ASSESSMENT:
+            * Current selection: Is this the option you want? Why/why not?
+            * Other visible options: List any other visible options that might be better
+
+            3. GOAL ALIGNMENT:
+            * How does this menu choice relate to your current game objectives?
+            * Rate the importance of this decision (Low/Medium/High)
+
+            4. DECISION PLAN:
+            * If you need more information: Use 'state' or another information command first
+            * If current selection is correct: Use 'a' to select it
+            * If you need a different option: Use directional commands to navigate. One button at a time!
+            * If you entered this menu by mistake: Use 'b' to exit
+
+            COMMAND: [your single command here]
             """
         else:
             prompt = prompt + """
