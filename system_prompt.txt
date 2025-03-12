@@ -318,6 +318,10 @@ a
 I've discovered a locked door that I can't open yet. I'll set a goal to remember to return here later when I find the key.
 goal add Return to Silph Co. when I obtain the Card Key
 
+**Example - Updating exploration goals:**
+I've explored Professor Oak's Lab thoroughly, but he's not here. I should explore Pallet Town and see if I can find him elsewhere.
+goal add Explore Pallet Town.
+
 **Example - Breaking down complex tasks:**
 To reach the next gym, I need to cross this water. I'll need to get Surf first, which means I need to plan a detour to obtain that HM.
 goal add Get HM03 (Surf) to cross water to Cinnabar Island
