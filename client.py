@@ -113,7 +113,7 @@ class Blackboard:
         
         # Track state transitions
         if self.current_state_type != state_type:
-            self.track_state_transition(state_type, current_frame)
+            self.track_state_transition(current_frame)
             
             # Always reset stability on state type change
             self.stability_counter = 0
@@ -170,7 +170,7 @@ class Blackboard:
         # For other states or if we can't determine, assume content changed
         return True
     
-    def track_state_transition(self, new_state_type, frame):
+    def track_state_transition(self, frame):
         """Record a state transition"""
         if self.current_state_type is not None:
             # Record the state exit
@@ -509,7 +509,6 @@ class Blackboard:
         
         # Default cooldown is 24 frames
         return frames_since_input >= 24
-
 
 # Decision Maker class for determining actions
 class DecisionMaker:
