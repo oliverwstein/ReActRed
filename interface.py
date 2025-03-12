@@ -1801,7 +1801,7 @@ class InteractiveMode:
             except ValueError:
                 pass # 'a' not found, process the whole sequence
             
-            valid_sequence = all(btn in self.valid_buttons for btn in buttons)
+            valid_sequence = all(btn.lower() in self.valid_buttons for btn in buttons)
 
             if valid_sequence and buttons:
                 self.button_sequence = buttons[1:]
