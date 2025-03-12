@@ -18,7 +18,7 @@ import random
 import websockets
 from enum import Enum, auto
 import networkx as nx
-from agent import ReactAgent
+from local_agent import ReactAgent
 from interface import InteractiveMode
 
 # Set up logging
