@@ -1910,7 +1910,7 @@ class InteractiveMode:
         """Show detailed information about the current game state tailored for use by the LLM"""
         game_state = blackboard.game_state
         logger.info(f"State: {game_state['state']} | Last Button: {game_state['last_button']}")
-        if game_state['map']['dimensions'] != (0,0):
+        if game_state['map']['dimensions'] != [0,0]:
             logger.info(f"\n=== MAP DATA ===")
             logger.info(f"Current Map: {game_state['map']['name']}")
             player_x, player_y, facing = game_state['player']['position']
