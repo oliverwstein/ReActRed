@@ -236,8 +236,8 @@ class EnhancedPokemonWrapper:
             # Menu information
             menu_state = self.data['text'].get('menu_state', {})
             if menu_state.get('cursor_pos') is not None:
-                print(f"\n=== VISIBLE TEXT ===")
-                for line in self.data['text'].get("lines"):
+                print(f"\n=== OCR ===")
+                for line in self.data['text'].get("OCR"):
                     print(f"  {line}")
                 print(f"\n=== MENU INFO ===")
                 cursor_pos = menu_state.get('cursor_pos', ('?', '?'))
@@ -291,7 +291,7 @@ class EnhancedPokemonWrapper:
                 self.data['text'] = self.get_text_data()
             except Exception as e:
                 print(f"ERROR getting text data: {e}")
-                self.data['text'] = {'lines': [], 'menu_state': {}, 'dialog': []}
+                self.data['text'] = {'OCR': [], 'lines': [], 'menu_state': {}, 'dialog': []}
             
             # Determine game state
             try:
@@ -978,10 +978,12 @@ class EnhancedPokemonWrapper:
             dict: Dictionary containing structured text data
         """
         # Get all visible text from the screen using only tile IDs
+        raw_text = self.extract_text_from_tilemap(include_boxes=True)
         screen_text = self.extract_text_from_tilemap()
         
         # Initialize result structure
         result = {
+            "OCR": [],
             "lines": [],
             "menu_state": {},
             "dialog": []
@@ -991,11 +993,14 @@ class EnhancedPokemonWrapper:
         for line in screen_text:
             if line.strip():  # Skip empty lines
                 result["lines"].append(line)
+
+        for line in raw_text:
+            if line.strip():
+                result["OCR"].append(line)
         
         # Get menu state
         menu_state = {
             "current_item": self.pyboy.memory[self.memory_addresses['CURRENT_MENU_ITEM']],
-            "max_item": self.pyboy.memory[0xCC28],      # wMaxMenuItem
             "cursor_pos": None,
             "cursor_text": None
         }
@@ -1020,15 +1025,15 @@ class EnhancedPokemonWrapper:
         
         # Check if we're in a dialog state - dialog area is typically the bottom portion
         dialog_area = screen_text[12:18]  # Rows where dialog typically appears
-        
-        # Extract dialog text
         current_dialog_text = []
-        for line in dialog_area:
-            clean_line = line.strip()
-            if clean_line and "▶" not in clean_line and clean_line != "▼":
-                current_dialog_text.append(clean_line.strip("▼").strip())
-        if len(current_dialog_text) > 0:
-            result['dialog'] = current_dialog_text
+        if "─" in raw_text[-1]:
+            # Extract dialog text
+            for line in dialog_area:
+                clean_line = line.strip()
+                if clean_line and "▶" not in clean_line and clean_line != "▼":
+                    current_dialog_text.append(clean_line.strip("▼").strip())
+            if len(current_dialog_text) > 0:
+                result['dialog'] = current_dialog_text
         # Check if joypad input is being ignored (common during dialog)
         joy_ignore = self.pyboy.memory[0xCD6B]  # wJoyIgnore
         scripted_input = joy_ignore != 0
@@ -1046,8 +1051,8 @@ class EnhancedPokemonWrapper:
             result["text_context"] = "none"
         
         return result
-
-    def extract_text_from_tilemap(self):
+    
+    def extract_text_from_tilemap(self, include_boxes = False):
         """
         Extract text from the tilemap based solely on tile IDs.
         Much more efficient than pixel analysis.
@@ -1074,7 +1079,13 @@ class EnhancedPokemonWrapper:
                 
                 # Check if this tile is a text tile based on ID ranges
                 # Text tiles are usually in these ranges
-                is_text_tile = ((0x80 <= tile_id <= 0xFF) or  # Standard text (A-Z, a-z, 0-9)
+                if include_boxes:
+                    is_text_tile = ((0x70 <= tile_id <= 0xFF) or  # Standard text (A-Z, a-z, 0-9)
+                            (tile_id == 0x7F) or          # Space
+                            (tile_id in [0xED, 0xEE]) or  # ▶ and ▼ (cursor, prompt)
+                            (0x4A <= tile_id <= 0x5F))    # Control characters and special symbols
+                else:
+                    is_text_tile = ((0x80 <= tile_id <= 0xFF) or  # Standard text (A-Z, a-z, 0-9)
                             (tile_id == 0x7F) or          # Space
                             (tile_id in [0xED, 0xEE]) or  # ▶ and ▼ (cursor, prompt)
                             (0x4A <= tile_id <= 0x5F))    # Control characters and special symbols
@@ -1123,14 +1134,6 @@ class EnhancedPokemonWrapper:
                 return ""
             else:
                 return char
-        
-        # Handle some specific, commonly used tiles that might not be in the map
-        if char_byte == 0x7F:  # Space
-            return " "
-        elif char_byte == 0xED:  # ▶ (menu cursor)
-            return "▶"
-        elif char_byte == 0xEE:  # ▼ (text continue)
-            return "▼"
         
         # If character isn't in the map, return a space
         return " "
