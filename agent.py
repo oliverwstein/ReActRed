@@ -3,7 +3,6 @@ import re
 import logging
 import asyncio
 import google.generativeai as genai
-from datetime import datetime
 
 logger = logging.getLogger("PokemonAI")
 
@@ -176,7 +175,8 @@ class ReactAgent:
         prompt = f"""
         Recent game updates:
         {log_updates}
-        Before deciding on your next action:"""
+        Before deciding on your next action, look over the log updates for important dialog and relevant information on previous states
+        To make sure you understand what's going on, summarize them. Then, formulate your next steps:"""
 
         lines = log_updates.strip().split('\n')
         last_line = lines[-1] if lines else ""
@@ -244,7 +244,7 @@ class ReactAgent:
                 * For simple interactions with visible objects: Use directional commands followed by 'a'
                 * ONLY use manual movement when following a specific, short path to a visible destination
 
-                COMMAND: [your single command here]
+                [your single command here]
                 """
         elif 'MENU' in last_line:
             # Extract the currently selected option
@@ -300,7 +300,7 @@ class ReactAgent:
             * If you need a different option: Use directional commands to navigate. One button at a time!
             * If you entered this menu by mistake: Use 'b' to exit
 
-            COMMAND: [your single command here]
+            [your single command here]
             """
         else:
             prompt = prompt + """
