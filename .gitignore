@@ -10,3 +10,5 @@
 /.venv
 *.sh
 logs/
+Colored-Red.gb.ram
+Colored-Red.gb.state

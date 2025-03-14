@@ -1,94 +1,69 @@
+#!/usr/bin/env python3
+"""
+ReactAgent for Pokemon Red/Blue that leverages local LLMs through Ollama.
+
+This agent makes decisions based on game context and returns commands
+while maintaining memory of goals and notes.
+"""
+
 import os
 import re
 import logging
 import asyncio
-import google.generativeai as genai
+import json
+from datetime import datetime
 
+# Configure logging
 logger = logging.getLogger("PokemonAI")
 
 class ReactAgent:
     """
-    A minimalist agent that uses Google's Gemini AI to play Pokemon.
+    A ReactAgent that uses Ollama's local LLMs to play Pokemon.
     
-    This agent reads the game log file for context and uses Gemini to decide
-    what commands to send to the game.
+    This agent processes game context from the interface, maintains memory
+    of goals and notes, and returns structured commands with reasoning.
     """
     
-    def __init__(self, api_key=None, model_name="gemini-1.5-pro"):
+    def __init__(self, model_name="deepseek-r1"):
         """
-        Initialize the ReactAgent with Gemini API.
+        Initialize the ReactAgent with Ollama integration.
         
         Args:
-            api_key (str, optional): Google API key. If not provided, tries to use GEMINI_API_KEY env var.
-            model_name (str, optional): Which Gemini model to use. Defaults to "gemini-1.5-pro".
+            model_name (str, optional): Ollama model to use. Defaults to "deepseek-r1".
         """
-        # Set up API key
-        if api_key is None:
-            api_key = os.environ.get('GEMINI_API_KEY')
-            if api_key is None:
-                raise ValueError("No API key provided. Please provide an API key or set GEMINI_API_KEY env var.")
+        # Set up Ollama configuration
+        self.model_name = model_name
         
-        # Configure Gemini API
-        genai.configure(api_key=api_key)
+        # Load system prompt
+        self.system_prompt = self._get_system_prompt()
+        logger.info(f"Loaded system prompt ({len(self.system_prompt)} characters)")
         
-        # Set up model with appropriate parameters
-        generation_config = {
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "top_k": 64,
-            "max_output_tokens": 2048,
-        }
-        
-        safety_settings = [
+        # Initialize conversation history
+        self.messages = [
             {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
+                'role': 'system',
+                'content': self.system_prompt
+            }
         ]
         
-        system_prompt = self._get_system_prompt()
-        logger.info(f"Loaded system prompt ({len(system_prompt)} characters)")
-
-        # Create the model with system_instruction
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config=generation_config,
-            safety_settings=safety_settings,
-            system_instruction=system_prompt
-        )
-        
-        # Start chat without including system prompt in history
-        self.chat = self.model.start_chat(history=[])
-        
-        self.log_file = 'logs/pokemon_ai.log'
-        self.last_log_position = 0
+        # Initialize memory structures
+        self.goals = []
+        self.notes = []
+        self.command_history = []
         
         # Log agent initialization
-        logger.info(f"ReactAgent initialized with model: {model_name}")
+        logger.info(f"ReactAgent initialized with Ollama model: {model_name}")
         logger.info("Agent is ready to make decisions")
     
     def _get_system_prompt(self):
         """
-        Load the system prompt from a file.
+        Load the system prompt from a file or use default.
         
         Returns:
             str: The system prompt for the agent.
         """
         try:
             # Get the path to the system prompt file
-            # This assumes the file is in the same directory as the agent.py file
             script_dir = os.path.dirname(os.path.abspath(__file__))
             prompt_path = os.path.join(script_dir, 'system_prompt.txt')
             
@@ -99,273 +74,270 @@ class ReactAgent:
             logger.error(f"Error loading system prompt: {e}")
             # Fallback to a basic prompt if the file can't be loaded
             return """
-            You are an intelligent agent playing Pokemon Red/Blue. 
-            Make decisions to progress in the game.
-            Provide reasoning then a single command on the last line.
-            Valid commands: up, down, left, right, a, b, start, select, help
+                You are an intelligent agent playing Pokemon Red/Blue.
+                Analyze the game context and decide on the best action.
+
+                When responding:
+                1. Reason through the situation in detail
+                2. Consider your goals and current game state
+                3. End your response with a clear command using this format:
+
+                GOALS:
+                - Goal 1
+                - Goal 2
+
+                NOTES:
+                - Important observation 1
+                - Important observation 2
+
+                COMMAND: [button]
+
+                Available commands:
+                - Movement: up, down, left, right
+                - Action: a, b, start, select
+                - Sequences are allowed with commas (e.g., "up,up,right,a")
             """
     
-    def get_new_log_content(self):
+    def _add_memory_to_context(self, context):
         """
-        Get new content from the log file since the last check.
-        
-        Returns:
-            str: New log content
-        """
-        try:
-            with open(self.log_file, 'r') as f:
-                f.seek(self.last_log_position)
-                new_content = f.read()
-                self.last_log_position = f.tell()
-                return new_content
-        except Exception as e:
-            logger.error(f"Error reading log file: {e}")
-            return f"[Error reading log file: {e}]"
-    
-    def read_log_file(self):
-        """
-        Read the entire log file.
-        
-        Returns:
-            str: Log file content
-        """
-        try:
-            with open(self.log_file, 'r') as f:
-                return f.read()
-        except Exception as e:
-            logger.error(f"Error reading log file: {e}")
-            return f"[Error reading log file: {e}]"
-    
-    def extract_updates_since_last_prompt(self, log_content):
-        """
-        Extract the updates since the last prompt section from log content.
+        Add the agent's memory (goals and notes) to the provided context.
         
         Args:
-            log_content (str): Log content to parse
+            context (str): The game context from the interface
             
         Returns:
-            str: The extracted updates section or the whole log if not found
+            str: Enhanced context with memory information
         """
-        # Find the last occurrence of "=== UPDATES SINCE LAST PROMPT ==="
-        updates_pattern = r"===\s+UPDATES\s+SINCE\s+LAST\s+PROMPT\s+==="
-        matches = list(re.finditer(updates_pattern, log_content))
+        memory_section = "\n\n=== YOUR MEMORY ===\n"
         
-        if matches:
-            # Get the position of the last match
-            last_match = matches[-1]
-            start_pos = last_match.start()
-            
-            # Extract everything from that point onwards
-            return log_content[start_pos:]
-        
-        # If no updates section found, return the whole log
-        return log_content
-    
-    def format_prompt(self, log_updates):
-        """
-        Format the prompt to send to Gemini.
-        
-        Args:
-            log_updates (str): Recent log updates to include
-            
-        Returns:
-            str: Formatted prompt
-        """
-        # Build the prompt
-        prompt = f"""
-        Recent game updates:
-        {log_updates}
-        Before deciding on your next action, look over the log updates for important dialog and relevant information on previous states
-        To make sure you understand what's going on, summarize them. Then, formulate your next steps:"""
-
-        lines = log_updates.strip().split('\n')
-        last_line = lines[-1] if lines else ""
-        
-        if 'MAP' in last_line:
-            # Extract the current position and map name
-            prompt = prompt + f"""
-                1. ANALYZE YOUR SURROUNDINGS: 
-                - Look at the information above about your current position and surrounding tiles
-                - The ◄ symbol marks the direction you're currently facing
-                - Note any entities (NPCs, items, boulders) or warps nearby that you can interact with
-                - Review the paths to nearby warps and entities to plan efficient navigation
-
-                2. INTERPRET TILE CODES:
-                - '1' tiles are walkable
-                - '0' tiles are objects you can't walk through
-                - '#' tiles are map boundaries
-                - '?' tiles near warps might be passages (try walking into them)
-                - 'G' tiles are grass (may trigger wild Pokémon encounters)
-                - 'W' tiles are water (need to Surf to cross)
-                - 'T' tiles are trees (need to Cut to cross)
-                - '>' tiles are right-facing ledges (can jump right only)
-                - '<' tiles are left-facing ledges (can jump left only)
-                - 'v' tiles are down-facing ledges (can jump down only)
-
-                3. ORIENT YOURSELF:
-                - How well aware are you of the map you are on, between 0 and 100%? 
-                - Use command 'map' or 'state' if you are below 80% confidence.
-
-                4. CHOOSE YOUR ACTION:
-                - MOVEMENT: 'up', 'down', 'left', or 'right' to navigate
-                    * explore [options]: Automatically explore the current map
-                        - Available options: see-only, interact-entities, interact-tiles
-                        - Example: "explore interact-entities" to talk to all NPCs
-                    * map will give you paths to entities and warps you've seen, as well as showing you the map.
-                    * explore will explore the map for you. Manual map exploration should only be for when you know exactly where you are and where you want to go.
-                    * If you want to go somewhere and map has no path to it, use explore.
-                    * When you enter a new map, start by exploring it!
-                - INTERACTION: 'a' to interact with what's in front of you, 'b' to cancel
-                - MENU: 'start' to access the main menu, 'select' for secondary function
-                
-                - INFORMATION COMMANDS:
-                    * map: Shows the complete map view (use frequently to understand your surroundings better)
-                    * state: Shows detailed game state (positions, status, etc.)
-                    
-                    * inventory: Displays your items
-                    * team: Shows your Pokémon team status
-                    * atlas: Displays all discovered maps and connections
-                    * dialog: Shows recent conversation history
-                    * notes: Displays your current notes and objectives
-                    
-                - NOTE-TAKING COMMANDS:
-                    * note [text]: Adds a note to your journal
-                    * goal [text]: Sets a new goal
-                    * complete [goal]: Marks a goal as completed
-
-                OUTPUT FORMAT: 
-                1. SURROUNDINGS: Describe what you observe around you (entities, warps, obstacles)
-                2. DESTINATION: State where you want to go next and why
-                3. CONFIDENCE: Rate your map knowledge from 0-100%
-                * If below 80%, use either 'map' or 'explore'
-                4. NAVIGATION PLAN:
-                * For exploration: Use 'explore' command with appropriate options
-                * For known destinations: Use 'map' to find the optimal path
-                * For simple interactions with visible objects: Use directional commands followed by 'a'
-                * ONLY use manual movement when following a specific, short path to a visible destination
-
-                [your single command here]
-                """
-        elif 'MENU' in last_line:
-            # Extract the currently selected option
-            selected_option = None
-            cursor_text_match = re.search(r"Selected Text: '([^']+)'", log_updates)
-            if cursor_text_match:
-                selected_option = cursor_text_match.group(1)
-            
-            # Extract menu position information
-            menu_position = None
-            menu_info_match = re.search(r"INTERACTIVE: Menu selecting '[^']*' \(item (\d+)/(\d+)\)", log_updates)
-            if menu_info_match:
-                current_item = menu_info_match.group(1)
-                total_items = menu_info_match.group(2)
-                menu_position = f"{current_item}/{total_items}"
-            
-            prompt = prompt + f"""
-            1. MENU CONTEXT: 
-            - Currently selected option: {selected_option or "Unknown"}
-            - Menu position: {menu_position or "Unknown"}
-
-            - INFORMATION COMMANDS:
-                * map: Shows the current map view
-                * state: Shows detailed game state (positions, status, etc.)
-                * inventory: Displays your items
-                * team: Shows your Pokémon team status
-                * atlas: Displays all discovered maps and connections
-                * dialog: Shows recent conversation history
-                * notes: Displays your current notes and objectives
-                * help: See ALL possible commands, with context.
-                
-            - NOTE-TAKING COMMANDS:
-                * note [text]: Adds a note to your journal
-                * goal [text]: Sets a new goal
-                * complete [goal]: Marks a goal as completed
-
-            3. CONSIDER THE CONSEQUENCES:
-            - What will happen if you select this option?
-            - Is this choice aligned with your current goals?
-
-            OUTPUT:
-            2. OPTIONS ASSESSMENT:
-            * Current selection: Is this the option you want? Why/why not?
-            * Other visible options: List any other visible options that might be better
-
-            3. GOAL ALIGNMENT:
-            * How does this menu choice relate to your current game objectives?
-            * Rate the importance of this decision (Low/Medium/High)
-
-            4. DECISION PLAN:
-            * If you need more information: Use 'state' or another information command first
-            * If current selection is correct: Use 'a' to select it
-            * If you need a different option: Use directional commands to navigate. One button at a time!
-            * If you entered this menu by mistake: Use 'b' to exit
-
-            [your single command here]
-            """
+        # Add goals to context
+        memory_section += "CURRENT GOALS:\n"
+        if self.goals:
+            for goal in self.goals:
+                status = goal.get('status', 'active')
+                memory_section += f"- {goal.get('description', 'Unknown goal')} [{status}]\n"
         else:
-            prompt = prompt + """
-            1. DETERMINE YOUR CURRENT STATE: Based on the log, are you in a map,
-            menu, battle, or dialog?
-            
-            2. IF UNCERTAIN: Use an information command to clarify your situation.
-            - state: Get detailed game state
-            - map: See the current map view
-            - help: See all available commands
-            
-            3. CHOOSE AN APPROPRIATE ACTION: Based on your current state and goals.
-
-            Start with your reasoning, then just the command.
-            """
-        prompt = prompt + """\nThink carefully and reason fully. Your thoughts will guide you.
-        If you are stuck, take a step back and reflect. Information commands will help you."""
-        return prompt
-
-    async def get_command(self):
-        """
-        Get the next command based.
+            memory_section += "- No active goals set. Consider exploring or advancing the story.\n"
         
-        This is the main method called by the Interface to get the agent's decision.
+        # Add notes to context
+        memory_section += "\nYOUR NOTES:\n"
+        if self.notes:
+            for note in self.notes[-5:]:  # Only show last 5 notes to avoid context overload
+                memory_section += f"- {note.get('text', 'Unknown note')}\n"
+        else:
+            memory_section += "- No notes recorded yet.\n"
+        
+        # Add recent commands
+        memory_section += "\nRECENT COMMANDS:\n"
+        if self.command_history:
+            for cmd in self.command_history[-5:]:  # Only show last 5 commands
+                memory_section += f"- {cmd}\n"
+        else:
+            memory_section += "- No commands issued yet.\n"
+        
+        return context + memory_section
+    
+    def _parse_response(self, response_text):
+        """
+        Extract command and other information from the LLM's response.
+        
+        Args:
+            response_text (str): The full text response from the LLM
             
         Returns:
-            str: The command to execute
+            dict: Parsed information including command, goals, and notes
         """
-        # Read the log file
-        log_content = self.read_log_file()
+        # Remove any <think> sections that might be present
+        reasoning = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
         
-        # Extract the updates since last prompt
-        updates = self.extract_updates_since_last_prompt(log_content)
+        # Look for explicitly stated command with a clear delimiter
+        command_match = re.search(r'COMMAND:\s*([a-zA-Z0-9,]+)', response_text, re.IGNORECASE)
         
-        # Format the prompt with just the log updates
-        prompt = self.format_prompt(updates)
+        if command_match:
+            command = command_match.group(1).strip()
+        else:
+            # Fallback extraction methods
+            # Look for button mentions
+            valid_buttons = ["up", "down", "left", "right", "a", "b", "start", "select"]
+            
+            for button in valid_buttons:
+                # Various ways the command might be expressed
+                patterns = [
+                    rf'press ["\']?{button}["\']?',
+                    rf'command: ["\']?{button}["\']?', 
+                    rf'button: ["\']?{button}["\']?',
+                    rf'move ["\']?{button}["\']?',
+                    rf' {button} button',
+                    rf' {button}$',
+                ]
+                
+                for pattern in patterns:
+                    if re.search(pattern, response_text, re.IGNORECASE):
+                        return {"command": button, "reasoning": reasoning}
+            
+            # Default to 'a' as a safe action if nothing is found
+            command = "a"
         
+        # Extract any goals/notes if present (optional, not required format)
+        goals = []
+        notes = []
+        
+        # Simple regex to find goals and notes if available
+        goals_match = re.search(r'GOALS?:(.+?)(?:NOTES?:|COMMAND:|$)', response_text, re.DOTALL | re.IGNORECASE)
+        if goals_match:
+            goals_text = goals_match.group(1).strip()
+            goals = [{"description": goal.strip(), "status": "active", "id": i+1} 
+                    for i, goal in enumerate(re.findall(r'[-•*]\s*(.+)', goals_text))]
+        
+        notes_match = re.search(r'NOTES?:(.+?)(?:GOALS?:|COMMAND:|$)', response_text, re.DOTALL | re.IGNORECASE)
+        if notes_match:
+            notes_text = notes_match.group(1).strip()
+            notes = [{"text": note.strip()} 
+                    for note in re.findall(r'[-•*]\s*(.+)', notes_text)]
+        
+        return {
+            "command": command,
+            "reasoning": reasoning,
+            "goals": goals,
+            "notes": notes
+        }
+    
+    def _update_memory(self, parsed_response):
+        """
+        Update the agent's memory based on the response.
+        
+        Args:
+            parsed_response (dict): The parsed response
+        """
+        # Update goals if provided
+        if 'goals' in parsed_response and parsed_response['goals']:
+            # Replace goals completely if provided
+            self.goals = parsed_response['goals']
+        
+        # Add new notes if provided
+        if 'notes' in parsed_response and parsed_response['notes']:
+            for note in parsed_response['notes']:
+                # Add timestamp if not already present
+                if 'timestamp' not in note:
+                    note['timestamp'] = datetime.now().isoformat()
+                self.notes.append(note)
+    
+    def _record_command(self, command):
+        """
+        Record the command in the history.
+        
+        Args:
+            command (str): The command being executed
+        """
+        self.command_history.append(command)
+        # Keep history at a reasonable size
+        if len(self.command_history) > 50:
+            self.command_history = self.command_history[-50:]
+    
+    async def chat_with_ollama(self, prompt):
+        """
+        Send a prompt to Ollama and get the response.
+        
+        Args:
+            prompt (str): The prompt to send
+            
+        Returns:
+            str: The model's response
+        """
         try:
-            # Send the prompt to Gemini
-            logger.info("Asking Gemini for next command...")
+            # Add user message to history
+            self.messages.append({
+                'role': 'user',
+                'content': prompt
+            })
+            
+            # Log the prompt
+            logger.info(f"Asking LLM for next command...")
+            logger.info(f"Sending request to Ollama:\n {prompt}")
+            
+            # Import ollama here to avoid circular imports
+            import ollama
+            
+            # Use the chat method from ollama library
             response = await asyncio.to_thread(
-                lambda: self.chat.send_message(prompt)
+                ollama.chat,
+                model=self.model_name,
+                messages=self.messages
             )
             
-            # Extract the command (should be the last line)
-            response_text = response.text
-            lines = response_text.strip().split('\n')
+            # Extract content from response
+            content = ""
+            if hasattr(response, 'message') and hasattr(response.message, 'content'):
+                content = response.message.content
+            else:
+                # Fallback for other response formats
+                logger.warning(f"Unexpected response type from Ollama: {type(response)}")
+                content = str(response)
             
-            # Log the full response for transparency
-            logger.info(f"Gemini's reasoning:\n{response_text.strip()}")
+            # Log the response
+            logger.info(f"Response text: \n {content}")
             
-            # The command should be on the last non-empty line
-            command = None
-            for line in reversed(lines):
-                if line.strip():
-                    command = line.strip()
-                    break
+            # Add assistant response to history
+            self.messages.append({
+                'role': 'assistant',
+                'content': content
+            })
             
-            if not command:
-                logger.warning("No command found in Gemini's response, defaulting to 'a'")
-                command = "a"
+            # Keep history manageable - retain last 5 exchanges plus system prompt
+            if len(self.messages) > 11:  # system prompt + 5 exchanges
+                self.messages = [self.messages[0]] + self.messages[-10:]
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error using Ollama: {e}")
+            return "Error: Failed to get response from Ollama. Using default action 'a'."
+        
+    async def get_command(self, context):
+        """
+        Process game context and decide on the next command.
+        
+        This is the main method called by the interface.
+        
+        Args:
+            context (str): Game context from the interface
+            
+        Returns:
+            str: Command to execute
+        """
+        try:
+            # Add memory to context
+            enhanced_context = self._add_memory_to_context(context)
+            
+            # Send to LLM
+            response_text = await self.chat_with_ollama(enhanced_context)
+            
+            # Parse the response
+            parsed_response = self._parse_response(response_text)
+            
+            # Update memory
+            self._update_memory(parsed_response)
+            
+            # Log reasoning
+            logger.info(f"=== AGENT REASONING ===")
+            logger.info(parsed_response.get('reasoning', ''))
+            logger.info("=======================")
+            
+            # Get command
+            command = parsed_response.get('command', 'a')
+            
+            # Record command in history
+            self._record_command(command)
+            
+            # Log the command
+            if ',' in command:
+                logger.info(f"Returning button sequence: {command}")
+            else:
+                logger.info(f"Returning command: {command}")
             
             return command
             
         except Exception as e:
-            logger.error(f"Error getting command from Gemini: {e}")
+            logger.error(f"Error in get_command: {e}")
             # Return a safe default command
             return "a"

@@ -3,130 +3,6 @@ import base64
 import cv2
 
 class EnhancedPokemonWrapper:
-    """
-    Enhanced wrapper for Pokemon Red/Blue games that extracts additional data
-    directly from memory addresses.
-    self.data structure:
-    {
-        'frame': int,  # Current frame number
-        'state': str,  # Game state: "default", "menu", "dialog", "scripted"
-        'is_in_battle': bool,  # Whether the player is currently in a battle
-        'last_button': str,  # Last button press registered, e.g., "a", "b", "up", "down", "left", "right", "start", "select"
-        'screen': str,  # Base64-encoded JPEG image of the current screen
-
-        'map': {
-            'name': str,  # Current map name, e.g., "PalletTown"
-            'tileset': {
-                'name': str,  # Name of the current tileset, e.g., "Overworld"
-                'counter_tiles': list,  # Tiles used for counters in the tileset
-                'grass_tile': int,  # Tile ID for grass in the tileset
-                'animation': str,  # Animation type for the tileset, e.g., "TILEANIM_WATER"
-                'WATER': bool  # Whether the tileset contains water tiles
-            },
-            'dimensions': tuple,  # (width, height) of the current map in tiles
-            'warps': {
-                # Dictionary of warp points on the map
-                # Keys are (x, y) coordinates, values are destination map names
-                (x, y): str
-            }
-        },
-
-        'player': {
-            'position': tuple,  # (x_coord, y_coord, facing_direction)
-            'money': int,  # Player's current money amount
-            'badges': list,  # List of obtained badge names
-            'pokedex': {
-                'owned': int,  # Number of Pokémon owned
-                'seen': int  # Number of Pokémon seen
-            },
-            'bag': list,  # List of (item_name, quantity) tuples
-            'team': {
-                'count': int,  # Number of Pokémon in party
-                'pokemon': [
-                    {
-                        'species_id': str,  # Pokémon species identifier
-                        'nickname': str,  # Pokémon's nickname
-                        'level': int,  # Pokémon's level
-                        'current_hp': int,  # Current HP
-                        'max_hp': int,  # Maximum HP
-                        'status': str,  # Status condition, e.g., "Healthy", "Poisoned"
-                        'types': list,  # List of type names, e.g., ["FIRE", "FLYING"]
-                        'moves': list,  # List of move names
-                        'stats': {
-                            'HP': int,
-                            'ATTACK': int,
-                            'DEFENSE': int,
-                            'SPEED': int,
-                            'SPECIAL': int
-                        }
-                    },
-                    # Additional Pokémon entries...
-                ]
-            }
-        },
-
-        'viewport': {
-            'tiles': list,  # 2D array of tile representations showing walkable areas and special tiles
-            'entities': [
-                {
-                    'sprite_index': int,  # Index of the sprite in memory
-                    'name': str,  # Name of the sprite, e.g., "OakSprite"
-                    'position': {
-                        'x': int,  # X coordinate on the map
-                        'y': int  # Y coordinate on the map
-                    },
-                    'movement': {
-                        'status': int,  # Movement status value
-                        'type': str,  # Type of movement, e.g., "stationary", "random"
-                        'delay': int,  # Delay between movements
-                        'direction': str  # Current facing direction
-                    },
-                    'state': str  # Overall state of the entity
-                },
-                # Additional entity entries...
-            ]
-        },
-
-        'text': {
-            'lines': list,  # All visible text lines on screen
-            'menu_state': {
-                'current_item': int,  # Currently selected menu item index
-                'max_item': int,  # Maximum menu item index
-                'cursor_pos': tuple,  # (x, y) position of cursor, or None if no cursor
-                'cursor_text': str  # Text at cursor position, or None
-            },
-            'dialog': list,  # Current dialog text lines
-            'text_context': str  # Overall text context: "menu", "dialog", or "none"
-        },
-
-        'battle': {
-            # Only present when is_in_battle is True
-            'is_trainer_battle': bool,  # Whether this is a trainer battle
-            'player_pokemon': {
-                # Same structure as team pokemon, but for active battler
-                'species_id': int,
-                'species_name': str,
-                'nickname': str,
-                'level': int,
-                'hp_percent': int,  # Current HP as percentage of max
-                'status': str,
-                'types': list
-            },
-            'enemy_pokemon': {
-                # Same structure as player_pokemon, but for enemy
-                'species_id': int,
-                'species_name': str,
-                'nickname': str,
-                'level': int,
-                'hp_percent': int,
-                'status': str,
-                'types': list
-            },
-            'turn_counter': int  # Current battle turn number
-        }
-    }
-    """
-    
     def __init__(self, pyboy, memory_addresses=None, value_maps=None):
         self.pyboy = pyboy
         self.game_wrapper = pyboy.game_wrapper
@@ -870,6 +746,9 @@ class EnhancedPokemonWrapper:
         """
         if self.get_map_dimensions() == (0,0):
             return None
+        # Get map dimensions
+        map_width, map_height = self.get_map_dimensions()
+        
         # Get the basic walkable matrix (9x10)
         basic_walkable = self._get_screen_walkable_matrix().tolist()
         
@@ -885,8 +764,8 @@ class EnhancedPokemonWrapper:
         
         # Get player position to determine top-left corner of visible screen
         player_x, player_y, _ = self.get_player_position()
-        screen_left = max(0, player_x - 4)
-        screen_top = max(0, player_y - 4)
+        screen_left = player_x - 4
+        screen_top = player_y - 4
         
         # Get grass tile ID
         grass_tile = tileset.get('grass_tile', -1)
@@ -908,7 +787,6 @@ class EnhancedPokemonWrapper:
                 # Get the tile
                 tile = logical_tilemap[tile_y][tile_x]
                 tile_str = str(tile)
-                
                 # Convert to walkable matrix coordinates
                 walkable_y = tile_y // 2
                 walkable_x = tile_x // 2
@@ -917,9 +795,13 @@ class EnhancedPokemonWrapper:
                 if (walkable_y >= len(enhanced_matrix) or
                     walkable_x >= len(enhanced_matrix[0])):
                     continue
-                    
-                # Check for off-map tiles
-                if tile == 0x10:  # This is the typical ID for blank/off-map tiles
+                
+                # Calculate actual map coordinates for this tile
+                map_x = screen_left + walkable_x
+                map_y = screen_top + walkable_y
+                
+                # Check if this tile is off the map based on coordinates
+                if map_x < 0 or map_y < 0 or map_x >= map_width or map_y >= map_height:
                     enhanced_matrix[walkable_y][walkable_x] = '#'
                     continue
                     
@@ -963,9 +845,8 @@ class EnhancedPokemonWrapper:
                 # If we found a special type, update the matrix
                 if special_type:
                     enhanced_matrix[walkable_y][walkable_x] = special_type
-        
         return enhanced_matrix
-
+    
     def _get_screen_walkable_matrix(self):
         """Get the walkable matrix from the original game wrapper"""
         return self.game_wrapper._get_screen_walkable_matrix()
@@ -1192,9 +1073,8 @@ class EnhancedPokemonWrapper:
         
         # Initialize battle state dictionary
         battle_state = {
-            "is_trainer_battle": is_in_battle == 2,  # 2 = trainer battle, 1 = wild battle
+            "is_trainer_battle": self.pyboy.memory[0xd713]
         }
-        
         # Get player Pokemon data
         battle_state["player_pokemon"] = self._extract_battle_mon_data(0xD014)  # wBattleMon
         
@@ -1203,9 +1083,6 @@ class EnhancedPokemonWrapper:
         if enemy['species_name'] != "MISSINGNO":
             battle_state["enemy_pokemon"] = enemy
 
-        # Calculate which turn it is in the battle
-        battle_state["turn_counter"] = (self.pyboy.memory[0xCCF1] | self.pyboy.memory[0xCCF2]) > 0
-        
         return battle_state
 
     def _extract_battle_mon_data(self, base_addr):
