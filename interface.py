@@ -79,8 +79,9 @@ class InteractiveMode:
         
         # Start with default context
         recent_dialog = await self._get_recent_dialog(client)
+        recent_moves = await self._get_recent_moves(client)
         move_options = await self._show_move_options(client)
-        context = recent_dialog['context'] + move_options
+        context = recent_dialog['context'] + recent_moves['context'] + move_options
         
         # Keep processing until we get a button
         while True:
@@ -102,7 +103,6 @@ class InteractiveMode:
                 context = recent_dialog['context'] + self._show_move_options(client)
     
     async def get_dialog_action(self, client):
-        self._show_dialog_state(client)
         return "a"  # Auto-advance
     
     async def _get_command(self, context):
@@ -267,9 +267,6 @@ class InteractiveMode:
             for info in warp_info:
                 map_display.append(f"  - {info}")
         
-        # Note: We're removing the legend from here as it will be 
-        # generated contextually in the _show_move_options function
-        
         return "\n".join(map_display)
     
     async def _show_move_options(self, client):
@@ -288,7 +285,7 @@ class InteractiveMode:
         x, y, facing = position
         
         # More natural phrasing for location
-        output.append(f"\nYou are in {map_name} facing {facing}")
+        output.append(f"\nYou are in {map_name}")
         
         # Create and add visual map display
         output.append("\nMAP VIEW:")
@@ -354,7 +351,7 @@ class InteractiveMode:
         if '0' in present_tiles:
             output.append("X - Wall or object")
         if '#' in present_tiles:
-            output.append("# - Off-map area (outside the accessible area)")
+            output.append("# - Unreachable Area (outside game bounds)")
         if 'G' in present_tiles:
             output.append("G - Grass (may contain wild Pokémon)")
         if 'W' in present_tiles:
@@ -563,24 +560,24 @@ class InteractiveMode:
                     desc = f"{direction.lower()}: {tile_code} tile"
                 
                 if can_move:
-                    movement_actions.append(f"{direction.lower()}: move {direction.lower()}")
+                    movement_actions.append(f"To move {direction.lower()}: use command {direction.upper()}")
                 # Add facing action for interesting but not walkable tiles
                 elif interesting_object and direction.lower() != facing.lower():
                     if tile_code == "W":
-                        movement_actions.append(f"{direction.lower()}: Turn to face the water")
+                        movement_actions.append(f"To turn to face the water, use command {direction.upper()}")
                     elif tile_code == "T":
-                        movement_actions.append(f"{direction.lower()}: Turn to face the tree")
+                        movement_actions.append(f"To turn to face the tree, use command {direction.upper()}")
                     elif tile_code == "0":
-                        movement_actions.append(f"{direction.lower()}: Turn to face the object")
+                        movement_actions.append(f"To turn to face the object, use command {direction.upper()}")
                     else:
-                        movement_actions.append(f"{direction.lower()}: Turn to face {direction.lower()}")
+                        movement_actions.append(f"To turn to face {direction.lower()}, use command {direction.upper()}")
             
             # Add the description to the output
             if desc:
                 output.append(f"  {desc}")
         
         # Show available actions with better grouping
-        output.append("\nAVAILABLE ACTIONS:")
+        output.append("\nAVAILABLE COMMANDS:")
         
         # Movement actions
         if movement_actions:
@@ -609,24 +606,19 @@ class InteractiveMode:
         facing_entity = facing_info.get("entity")
         
         # Simple check for interactable objects
-        can_interact = facing_entity or facing_tile in ["X", "T", "W"]
-        
+        can_interact = facing_entity or facing_tile in ["0", "X", "T", "W"]
+        tile_key = {"0": "object","X": "object", "T": "tree", "W": "water"}
         if can_interact:
             output.append("  INTERACTION:")
             if facing_entity:
-                output.append(f"  • A: Talk to {facing_entity}")
+                output.append(f"  • To talk to {facing_entity}, use command A")
             else:
-                output.append("  • A: Interact with what's in front of you")
+                output.append(f"  • To interact with the {tile_key[facing_tile]} in front of you, use command A")
 
         
         # Menu actions
         output.append("  MENU:")
-        output.append("  • START: Open POKEMON menu")
-        
-        # Client commands
-        output.append("  CLIENT:")
-        output.append("  • state - Show detailed game state")
-        output.append("  • help - Display help information")
+        output.append("  • To open the POKEMON menu, use command START")
         
         # Return the complete output
         return "\n".join(output)
@@ -659,73 +651,20 @@ class InteractiveMode:
         
         # Display all available actions equally without preference
         output.append("\nAVAILABLE ACTIONS:")
-        output.append(f"  • A: Select the current cursor option ({cursor_text})")
-        output.append("  • B: Cancel/Go back")
-        output.append("  • UP/DOWN: Move cursor between options")
-        output.append("  • LEFT/RIGHT: Move cursor between columns (if available)")
-        output.append("  • START: Confirm (used primarily when naming characters)")
+        output.append(f"  • To select the current cursor option ({cursor_text}), use command A")
+        output.append("  • To Cancel/Go back, use command B")
+        output.append("  • To move the cursor up, use command UP")
+        output.append("  • To move the cursor down, use command DOWN")
+        output.append("  • To move the cursor left, use command LEFT")
+        output.append("  • To move the cursor right, use command RIGHT")
         
-        # Add client commands
-        output.append("\nCLIENT COMMANDS:")
-        output.append("  • state - Show detailed game state")
-        output.append("  • journal [type] [count] - Show recent journal entries")
-        output.append("  • help - Display help information")
+        # # Add client commands
+        # output.append("\nCLIENT COMMANDS:")
+        # output.append("  • state - Show detailed game state")
+        # output.append("  • journal [type] [count] - Show recent journal entries")
+        # output.append("  • help - Display help information")
         
         # Return the complete output
-        result = "\n".join(output)
-        return result
-    
-    def _show_dialog_state(self, client):
-        """Show dialog state in text adventure format"""
-        dialog_lines = client.game_state.get("state", {}).get("text", {}).get("dialog", [])
-        output = ["CONVERSATION"]
-        
-        # Get current map and entities for context
-        state = client.game_state.get("state", {})
-        map_name = state.get("map", {}).get("name", "Unknown")
-        entities = state.get("viewport", {}).get("entities", [])
-        
-        # Try to identify who might be speaking
-        speaker = "Someone"
-        # Find the entity directly in front of the player
-        player_pos = state.get("player", {}).get("position", (0, 0, "Unknown"))
-        if player_pos:
-            x, y, facing = player_pos
-            # Calculate position in front of player
-            if facing == "Up":
-                front_x, front_y = x, y - 1
-            elif facing == "Down":
-                front_x, front_y = x, y + 1
-            elif facing == "Left":
-                front_x, front_y = x - 1, y
-            elif facing == "Right":
-                front_x, front_y = x + 1, y
-            else:
-                front_x, front_y = x, y
-            
-            # Check if any entity is at this position
-            for entity in entities:
-                entity_x = entity['position']['x']
-                entity_y = entity['position']['y']
-                if entity_x == front_x and entity_y == front_y:
-                    speaker = entity.get('name', 'Someone')
-                    break
-        
-        # Format dialog as a conversation
-        if dialog_lines:
-            dialog_text = " ".join(dialog_lines)
-            output.append(f"\n{speaker} says:")
-            output.append(f'  "{dialog_text}"')
-        
-        # Show available actions
-        output.append("\nAVAILABLE ACTIONS:")
-        output.append("  • Continue (press A)")
-        
-        # Add client commands
-        output.append("\nCLIENT COMMANDS:")
-        output.append("  • state - Show detailed game state")
-        output.append("  • help - Display help information")
-        
         result = "\n".join(output)
         return result
     
@@ -782,6 +721,40 @@ class InteractiveMode:
         
         return {"context": context}
     
+    async def _get_recent_moves(self, client):
+        """
+        Get all movement entries since the most recent non-movement action.
+        """
+        # Get a reasonable number of recent actions to examine
+        action_entries = await client.get_recent_entries(count=30, entry_type="action")
+        if not action_entries:
+            return {"context": ""}
+        non_move_action = None
+        for action in action_entries[::-1]:
+            state = action.get("data", {}).get("state", "")
+            if state == "dialog":
+                non_move_action = action
+                break
+        
+        # If we didn't find a non-dialog action, use the oldest action we have
+        if not non_move_action and action_entries:
+            non_move_action = action_entries[-1]
+        
+        # Get reference frame
+        reference_frame = non_move_action.get("frame", 0)
+        
+        # Get all dialog entries since that frame
+        move_entries = await client.get_entries_since_frame(reference_frame, entry_type="movement")
+        
+        # Format entries
+        if move_entries:
+            context = self._format_journal_entries(move_entries, "movement", 
+                                                title=f"MOVEMENTS:")
+        else:
+            context = ""
+        
+        return {"context": context}
+    
     def _format_journal_entries(self, entries, entry_type=None, title=None):
         """Format journal entries for display"""
         if not entries:
@@ -795,7 +768,6 @@ class InteractiveMode:
         
         # Format based on entry type
         for entry in entries:
-            entry_time = entry.get("frame", 0)
             entry_type = entry.get("type", "unknown")
             entry_data = entry.get("data", {})
             
@@ -807,7 +779,7 @@ class InteractiveMode:
                 position = entry_data.get("position", (0, 0, "Unknown"))
                 map_name = entry_data.get("map", "Unknown")
                 x, y, facing = position
-                output.append(f"Moved to {map_name} ({x}, {y}) facing {facing}")
+                output.append(f"Moved {facing} on {map_name}")
             
             elif entry_type == "menu":
                 cursor_text = entry_data.get("cursor_text", "Unknown")
