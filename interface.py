@@ -100,7 +100,9 @@ class InteractiveMode:
                 context = result["context"]
             else:
                 recent_dialog = await self._get_recent_dialog(client)
-                context = recent_dialog['context'] + self._show_move_options(client)
+                recent_moves = await self._get_recent_moves(client)
+                move_options = await self._show_move_options(client)
+                context = recent_dialog['context'] + recent_moves['context'] + move_options
     
     async def get_dialog_action(self, client):
         return "a"  # Auto-advance
